@@ -77,7 +77,7 @@ Rules:
 `read` and every mutation reply append a one-line footer when the workspace has unresolved history:
 
 ```
-· 1 pending since 2026-08-11 (recovered from log)
+· 1 unresolved since 2026-08-11 (recovered from log)
 ```
 
 Trigger: a `pending` or `in_progress` task whose `updated_seq` is older than `STALE_THRESHOLD_SEQ` events behind the latest seq. Threshold constant exported from the module (`STALE_THRESHOLD_SEQ = 200`, approximating 24h of activity); deterministic, boundary-testable, no wall-clock sleeps.

@@ -455,7 +455,7 @@ test("stale pending/in_progress tasks append a footer; fresh queues omit it", as
   use(cwd5);
   await tool.execute("t49", { action: "create", tasks: [{ text: "ancient" }] });
   const fresh = await tool.execute("t50", { action: "read" });
-  assert.doesNotMatch(textOf(fresh), /pending since/);
+  assert.doesNotMatch(textOf(fresh), /unresolved since/);
 
   // age the workspace: append far more events than the staleness threshold.
   // start events for unknown ids are replay no-ops, so the projection is untouched.
@@ -469,7 +469,7 @@ test("stale pending/in_progress tasks append a footer; fresh queues omit it", as
   db.close();
 
   const stale = await tool.execute("t51", { action: "read" });
-  assert.match(textOf(stale), /1 pending since/);
+  assert.match(textOf(stale), /1 unresolved since/);
 });
 
 // ---- parallel calls serialize deterministically ----

@@ -90,6 +90,8 @@ function openDb(): DatabaseSync {
     // corrupt or unreadable: fall through to recreate
   }
   rmSync(p, { force: true });
+  rmSync(`${p}-wal`, { force: true });
+  rmSync(`${p}-shm`, { force: true });
   const db = new DatabaseSync(p);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA busy_timeout = 5000");
@@ -213,7 +215,7 @@ function staleFooter(db: DatabaseSync): string | null {
     (max, r) => (r.updated_ts > max ? r.updated_ts : max),
     rows[0].updated_ts,
   );
-  return `· ${rows.length} pending since ${latestTs.slice(0, 10)} (recovered from log)`;
+  return `· ${rows.length} unresolved since ${latestTs.slice(0, 10)} (recovered from log)`;
 }
 
 function maxIdNum(tasks: Iterable<StoredTask>): number {
