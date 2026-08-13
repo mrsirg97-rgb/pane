@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 export const EXT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -63,7 +63,9 @@ export async function loadExtensionTool(extPath, { requireTool = true } = {}) {
 
 /** An isolated scratch directory for a test (also used as cwd/HOME). */
 export function scratchDir() {
-  return mkdtempSync(join(tmpdir(), "pi-ext-test-"));
+  // realpath: macOS tmpdir lives under /var -> /private/var symlink, and
+  // process.cwd() always returns the resolved spelling.
+  return realpathSync(mkdtempSync(join(tmpdir(), "pi-ext-test-")));
 }
 
 /** TypeBox Value from pi's bundled copy (same code the extension schema uses). */
