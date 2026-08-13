@@ -1,7 +1,8 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -10,8 +11,17 @@ import { errorText, header, indent, progressBar } from "./_render-kit.mjs";
 
 const DIR = join(homedir(), ".pi/agent/todos");
 
+/** Staleness threshold in event-count, not wall-clock: a task whose last update is
+ *  this many events behind the latest seq is "stale". ~24h of activity. */
+export const STALE_THRESHOLD_SEQ = 200;
+
 type Status = "pending" | "in_progress" | "done" | "failed";
 type Task = { id: string; text: string; status: Status };
+type StoredTask = Task & {
+  pos: number;
+  created_seq: number;
+  updated_seq: number;
+};
 
 const ACTION = StringEnum([
   "create",
@@ -28,45 +38,185 @@ const MARK: Record<Status, string> = {
   failed: "[!]",
 };
 
-function storePath(): string {
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS events (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  op TEXT NOT NULL CHECK (op IN ('create', 'start', 'complete', 'fail', 'retry')),
+  args TEXT NOT NULL,
+  session TEXT
+);
+CREATE TABLE IF NOT EXISTS tasks (
+  id TEXT PRIMARY KEY,
+  text TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'in_progress', 'done', 'failed')),
+  pos INTEGER NOT NULL,
+  created_seq INTEGER NOT NULL REFERENCES events(seq),
+  updated_seq INTEGER NOT NULL REFERENCES events(seq)
+);
+CREATE INDEX IF NOT EXISTS tasks_pos_seq ON tasks (pos, created_seq);
+`;
+
+function dbPath(): string {
   const key = createHash("sha1")
     .update(process.cwd())
     .digest("hex")
     .slice(0, 12);
-  return join(DIR, `${key}.json`);
+  return join(DIR, `${key}.sqlite`);
 }
 
-function load(): Task[] {
+/** Open the workspace database. Fail closed on corruption: a database that fails
+ *  to open or fails integrity check is recreated empty, never partially read. */
+function openDb(): DatabaseSync {
+  const p = dbPath();
+  mkdirSync(DIR, { recursive: true });
   try {
-    const raw = JSON.parse(readFileSync(storePath(), "utf8")) as Record<
-      string,
-      unknown
-    >[];
-    const tasks: Task[] = raw.map((e, i) => ({
-      id: typeof e.id === "string" ? e.id : `t${i + 1}`,
-      text: String(e.text ?? e.task ?? ""),
-      status: (["pending", "in_progress", "done", "failed"].includes(
-        e.status as string,
-      )
-        ? e.status
-        : "pending") as Status,
-    }));
-    if (raw.some((e) => typeof e.id !== "string" || e.task !== undefined))
-      save(tasks);
-    return tasks;
+    const db = new DatabaseSync(p);
+    db.exec("PRAGMA journal_mode = WAL");
+    db.exec("PRAGMA busy_timeout = 5000");
+    db.exec(SCHEMA);
+    const check = db.prepare("PRAGMA integrity_check").get() as {
+      integrity_check?: string;
+    };
+    if (check && check.integrity_check === "ok") {
+      return db;
+    }
+    db.close();
   } catch {
-    return [];
+    // corrupt or unreadable: fall through to recreate
+  }
+  rmSync(p, { force: true });
+  const db = new DatabaseSync(p);
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA busy_timeout = 5000");
+  db.exec(SCHEMA);
+  return db;
+}
+
+/** Replay the event log into a projection map. Total: never throws; bad rows are skipped. */
+function replay(db: DatabaseSync): Map<string, StoredTask> {
+  const map = new Map<string, StoredTask>();
+  const events = db
+    .prepare("SELECT seq, op, args FROM events ORDER BY seq")
+    .all() as {
+    seq: number;
+    op: string;
+    args: string;
+  }[];
+  for (const ev of events) {
+    let args: { tasks?: { text?: unknown }[]; id?: string } = {};
+    try {
+      args = JSON.parse(ev.args) as {
+        tasks?: { text?: unknown }[];
+        id?: string;
+      };
+    } catch {
+      continue; // corrupt row: skip, never fatal
+    }
+    applyEvent(map, ev.seq, ev.op as Op, args);
+  }
+  return map;
+}
+
+type Op = "create" | "start" | "complete" | "fail" | "retry";
+
+/** Apply one event to the projection. Deterministic; inapplicable transitions are no-ops. */
+function applyEvent(
+  map: Map<string, StoredTask>,
+  seq: number,
+  op: Op,
+  args: { tasks?: { text?: unknown }[]; id?: string },
+) {
+  if (op === "create") {
+    const incoming = args.tasks ?? [];
+    if (incoming.length === 0) {
+      map.clear();
+      return;
+    }
+    let maxId = 0;
+    let maxPos = -1;
+    for (const t of map.values()) {
+      const m = /^t(\d+)$/.exec(t.id);
+      if (m) maxId = Math.max(maxId, Number(m[1]));
+      maxPos = Math.max(maxPos, t.pos);
+    }
+    for (const inc of incoming) {
+      const text = String(inc?.text ?? "");
+      const existing = [...map.values()].find((t) => t.text === text);
+      if (existing) continue; // upsert: keep id, status, position
+      const id = `t${++maxId}`;
+      maxPos++;
+      map.set(id, {
+        id,
+        text,
+        status: "pending",
+        pos: maxPos,
+        created_seq: seq,
+        updated_seq: seq,
+      });
+    }
+    return;
+  }
+
+  const id = typeof args.id === "string" ? args.id : "";
+  const t = map.get(id);
+  if (!t) return; // unknown id: no-op on replay
+  if (op === "start" && t.status === "pending") {
+    t.status = "in_progress";
+    t.updated_seq = seq;
+  } else if (op === "complete" && t.status === "in_progress") {
+    t.status = "done";
+    t.updated_seq = seq;
+  } else if (op === "fail" && t.status === "in_progress") {
+    t.status = "failed";
+    t.updated_seq = seq;
+  } else if (op === "retry" && t.status === "failed") {
+    t.status = "pending";
+    t.updated_seq = seq;
   }
 }
 
-function save(tasks: Task[]) {
-  mkdirSync(DIR, { recursive: true });
-  const p = storePath();
-  writeFileSync(`${p}.tmp`, JSON.stringify(tasks, null, 1));
-  renameSync(`${p}.tmp`, p); // atomic: a crash never leaves a corrupt store
+/** Persist the projection (DELETE + INSERT all rows). Caller owns the transaction. */
+function persist(db: DatabaseSync, map: Map<string, StoredTask>) {
+  db.exec("DELETE FROM tasks");
+  const insert = db.prepare(
+    "INSERT INTO tasks (id, text, status, pos, created_seq, updated_seq) VALUES (?, ?, ?, ?, ?, ?)",
+  );
+  const ordered = [...map.values()].sort(
+    (a, b) => a.pos - b.pos || a.created_seq - b.created_seq,
+  );
+  for (const t of ordered) {
+    insert.run(t.id, t.text, t.status, t.pos, t.created_seq, t.updated_seq);
+  }
 }
 
-function maxIdNum(tasks: Task[]): number {
+/** One-line footer when the workspace has unresolved (stale) history, else null. */
+function staleFooter(db: DatabaseSync): string | null {
+  const latest = db.prepare("SELECT MAX(seq) AS m FROM events").get() as {
+    m: number | null;
+  };
+  if (!latest?.m || latest.m <= STALE_THRESHOLD_SEQ) return null;
+  const rows = db
+    .prepare(
+      `SELECT t.id, t.text, t.status, e.ts AS updated_ts
+       FROM tasks t JOIN events e ON e.seq = t.updated_seq
+       WHERE t.status IN ('pending', 'in_progress')
+         AND t.updated_seq <= ?`,
+    )
+    .all(latest.m - STALE_THRESHOLD_SEQ) as { updated_ts: string }[];
+  if (rows.length === 0) return null;
+  const latestTs = rows.reduce(
+    (max, r) => (r.updated_ts > max ? r.updated_ts : max),
+    rows[0].updated_ts,
+  );
+  return `· ${rows.length} pending since ${latestTs.slice(0, 10)} (recovered from log)`;
+}
+
+function maxIdNum(tasks: Iterable<StoredTask>): number {
   let max = 0;
   for (const t of tasks) {
     const m = /^t(\d+)$/.exec(t.id);
@@ -75,8 +225,11 @@ function maxIdNum(tasks: Task[]): number {
   return max;
 }
 
-function find(tasks: Task[], id: string): Task | undefined {
-  return tasks.find((t) => t.id === id);
+function find(
+  map: Map<string, StoredTask>,
+  id: string,
+): StoredTask | undefined {
+  return map.get(id);
 }
 
 function fail(message: string): never {
@@ -209,74 +362,133 @@ export default function todoExtension(pi: ExtensionAPI) {
     async execute(_toolCallId, params: any) {
       return withLog(() => {
         const action = params.action;
-        const tasks = load();
-        const reply = (note?: string) => {
-          const text = [note && `→ ${note}`, render(tasks)]
-            .filter(Boolean)
-            .join("\n");
-          return {
-            content: [{ type: "text", text }],
-            details: { action, tasks },
+        const db = openDb();
+        try {
+          db.exec("BEGIN IMMEDIATE");
+          const map = replay(db);
+
+          const reply = (note?: string) => {
+            const ordered = [...map.values()].sort(
+              (a, b) => a.pos - b.pos || a.created_seq - b.created_seq,
+            );
+            const tasks: Task[] = ordered.map((t) => ({
+              id: t.id,
+              text: t.text,
+              status: t.status,
+            }));
+            const footer = staleFooter(db);
+            const text = [note && `→ ${note}`, render(tasks), footer]
+              .filter(Boolean)
+              .join("\n");
+            return {
+              content: [{ type: "text", text }],
+              details: { action, tasks },
+            };
           };
-        };
 
-        if (action === "read") return reply();
-        if (action === "create") {
-          const incoming =
-            params.tasks ??
-            fail("action 'create' requires tasks: array of {text}");
-          let n = maxIdNum(tasks);
-          const created: Task[] = incoming.map((t: { text?: unknown }, i) => ({
-            id: `t${++n}`,
-            text: String(t.text ?? ""),
-            status: "pending",
-          }));
-          save(created);
-          tasks.splice(0, tasks.length, ...created);
-          return reply(
-            created.length
-              ? `queue replaced with ${created.length} tasks`
-              : "queue cleared",
-          );
+          if (action === "read") {
+            persist(db, map);
+            db.exec("COMMIT");
+            return reply();
+          }
+
+          if (action === "create") {
+            const incoming =
+              params.tasks ??
+              fail("action 'create' requires tasks: array of {text}");
+            const append = db
+              .prepare(
+                "INSERT INTO events (op, args, session) VALUES ('create', ?, NULL)",
+              )
+              .run(JSON.stringify({ tasks: incoming }));
+            applyEvent(map, Number(append.lastInsertRowid), "create", {
+              tasks: incoming,
+            });
+            persist(db, map);
+            db.exec("COMMIT");
+            return reply(
+              incoming.length
+                ? `queue replaced with ${incoming.length} tasks`
+                : "queue cleared",
+            );
+          }
+
+          const id = params.id ?? fail(`action '${action}' requires id`);
+          const t = find(map, id) ?? fail(`no task '${id}'`);
+          if (action === "start") {
+            if (t.status === "in_progress")
+              fail(`'${id}' is already in progress`);
+            if (t.status === "done") fail(`'${id}' is done; read-only`);
+            if (t.status === "failed") fail(`'${id}' failed; retry it first`);
+            const append = db
+              .prepare(
+                "INSERT INTO events (op, args, session) VALUES ('start', ?, NULL)",
+              )
+              .run(JSON.stringify({ id }));
+            applyEvent(map, Number(append.lastInsertRowid), "start", { id });
+            persist(db, map);
+            db.exec("COMMIT");
+            return reply(`'${id}' started`);
+          }
+
+          if (action === "complete") {
+            if (t.status === "pending")
+              fail(`'${id}' is pending; start it first`);
+            if (t.status === "done") fail(`'${id}' is done; read-only`);
+            if (t.status === "failed") fail(`'${id}' failed; retry it first`);
+            const append = db
+              .prepare(
+                "INSERT INTO events (op, args, session) VALUES ('complete', ?, NULL)",
+              )
+              .run(JSON.stringify({ id }));
+            applyEvent(map, Number(append.lastInsertRowid), "complete", { id });
+            persist(db, map);
+            db.exec("COMMIT");
+            return reply(`'${id}' completed`);
+          }
+
+          if (action === "fail") {
+            if (t.status === "pending")
+              fail(`'${id}' is pending; start it first`);
+            if (t.status === "done") fail(`'${id}' is done; read-only`);
+            if (t.status === "failed") fail(`'${id}' is already failed`);
+            const append = db
+              .prepare(
+                "INSERT INTO events (op, args, session) VALUES ('fail', ?, NULL)",
+              )
+              .run(JSON.stringify({ id }));
+            applyEvent(map, Number(append.lastInsertRowid), "fail", { id });
+            persist(db, map);
+            db.exec("COMMIT");
+            return reply(`'${id}' failed`);
+          }
+
+          if (t.status !== "failed")
+            fail(`'${id}' is not failed; nothing to retry`);
+          const append = db
+            .prepare(
+              "INSERT INTO events (op, args, session) VALUES ('retry', ?, NULL)",
+            )
+            .run(JSON.stringify({ id }));
+          applyEvent(map, Number(append.lastInsertRowid), "retry", { id });
+          persist(db, map);
+          db.exec("COMMIT");
+          return reply(`'${id}' back to pending`);
+        } catch (err) {
+          try {
+            db.exec("ROLLBACK");
+          } catch {
+            /* already committed or never begun */
+          }
+          throw err;
+        } finally {
+          try {
+            db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+          } catch {
+            /* read-only or closed */
+          }
+          db.close();
         }
-
-        const id = params.id ?? fail(`action '${action}' requires id`);
-        const t = find(tasks, id) ?? fail(`no task '${id}'`);
-        if (action === "start") {
-          if (t.status === "in_progress")
-            fail(`'${id}' is already in progress`);
-          if (t.status === "done") fail(`'${id}' is done; read-only`);
-          if (t.status === "failed") fail(`'${id}' failed; retry it first`);
-          t.status = "in_progress";
-          save(tasks);
-          return reply(`'${id}' started`);
-        }
-
-        if (action === "complete") {
-          if (t.status === "pending")
-            fail(`'${id}' is pending; start it first`);
-          if (t.status === "done") fail(`'${id}' is done; read-only`);
-          if (t.status === "failed") fail(`'${id}' failed; retry it first`);
-          t.status = "done";
-          save(tasks);
-          return reply(`'${id}' completed`);
-        }
-
-        if (action === "fail") {
-          if (t.status === "pending")
-            fail(`'${id}' is pending; start it first`);
-          if (t.status === "done") fail(`'${id}' is done; read-only`);
-          if (t.status === "failed") fail(`'${id}' is already failed`);
-          t.status = "failed";
-          save(tasks);
-          return reply(`'${id}' failed`);
-        }
-
-        if (t.status !== "failed")
-          fail(`'${id}' is not failed; nothing to retry`);
-        t.status = "pending";
-        save(tasks);
-        return reply(`'${id}' back to pending`);
       });
     },
   });
