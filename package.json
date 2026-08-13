@@ -5,6 +5,7 @@
   "private": true,
   "pi": {
     "extensions": [
+      "extensions/pane-setup.ts",
       "extensions/builtin-restyle.ts",
       "extensions/footer.ts",
       "extensions/input.ts",

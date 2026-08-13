@@ -1,12 +1,48 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { errorText, header, preview } from "./_render-kit.mjs";
 
-export const KERNEL_PYTHON = join(homedir(), ".pi/agent/kernel-venv/bin/python");
-export const KERNEL_HOST = join(homedir(), ".pi/agent/kernel/kernel_host.py");
+const VENV_DIR = join(homedir(), ".pi/agent/kernel-venv");
+export const KERNEL_PYTHON = join(VENV_DIR, "bin/python");
+
+export function resolveKernelHost(): string {
+  const local = join(homedir(), ".pi/agent/kernel/kernel_host.py");
+  if (existsSync(local)) return local;
+  try {
+    return fileURLToPath(new URL("../kernel/kernel_host.py", import.meta.url));
+  } catch {
+    return local;
+  }
+}
+export const KERNEL_HOST = resolveKernelHost();
+
+function runStep(command: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { timeout: 300_000 }, (err, _stdout, stderr) =>
+      err
+        ? reject(new Error(`${command} ${args[0] ?? ""}: ${String(stderr || err.message).slice(-500)}`))
+        : resolve(),
+    );
+  });
+}
+
+let bootstrap: Promise<void> | null = null;
+export function ensureKernel(): Promise<void> {
+  if (existsSync(KERNEL_PYTHON)) return Promise.resolve();
+  bootstrap ??= (async () => {
+    await runStep("python3", ["-m", "venv", VENV_DIR]);
+    await runStep(join(VENV_DIR, "bin/pip"), ["install", "--quiet", "ipython", "numpy", "pandas"]);
+  })().catch((err) => {
+    bootstrap = null;
+    throw new Error(`kernel bootstrap failed (needs python3 + network): ${err.message}`);
+  });
+  return bootstrap;
+}
 const DEFAULT_TIMEOUT_MS = 120_000;
 const STDERR_TAIL = 4096;
 
@@ -108,7 +144,14 @@ export class Kernel {
   }
 
   private async dispatch(payload: Record<string, unknown>, timeoutMs: number): Promise<Reply> {
-    if (!this.proc) this.start();
+    if (!this.proc) {
+      try {
+        await ensureKernel();
+      } catch (err) {
+        return { id: null, ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+      this.start();
+    }
     const id = String(++this.seq);
     const wait = new Promise<Reply>((resolve) => this.pending.set(id, resolve));
     try {

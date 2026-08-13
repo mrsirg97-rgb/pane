@@ -49,8 +49,9 @@ or copy `extensions/` into `~/.pi/agent/extensions/` and `themes/` into `~/.pi/a
 
 ## bring your own
 
-- **web tools**: web-search expects SearXNG on `127.0.0.1:8888`; web-fetch routes through a proxy at `127.0.0.1:8889` (set `PI_WEB_FETCH_PROXY=` empty to fetch direct). a docker compose for both (searxng + tinyproxy + DOCKER-USER egress firewall) is the recommended pairing.
-- **python kernel**: expects a venv at `~/.pi/agent/kernel-venv` and `kernel/kernel_host.py` at `~/.pi/agent/kernel/` (copy from this repo; `python -m venv` + `pip install ipython numpy pandas`).
+- **themes** copy themselves into `~/.pi/agent/themes/` on first launch (never overwriting yours); pick one in `/settings`.
+- **python kernel** bootstraps itself on first use: creates `~/.pi/agent/kernel-venv` and installs ipython/numpy/pandas (needs `python3` + network; first call is slow once). `kernel_host.py` runs from the package; a copy at `~/.pi/agent/kernel/` overrides it.
+- **web tools**: web-search expects SearXNG on `127.0.0.1:8888` (`PI_SEARXNG_URL` overrides); web-fetch routes through a proxy at `127.0.0.1:8889` (`PI_WEB_FETCH_PROXY=` empty fetches direct). a docker compose pairing (searxng + tinyproxy + DOCKER-USER egress firewall) is recommended, or tunnel both ports from a machine that has it.
 - **trafilatura** on PATH upgrades web-fetch extraction; falls back to built-in tag-strip.
 
 ## caveats
