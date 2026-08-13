@@ -2,7 +2,7 @@ import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { errorText, header, preview, shortUrl } from "./_render-kit.mjs";
 
-const SEARXNG = "http://127.0.0.1:8888/search";
+const SEARXNG = `${process.env.PI_SEARXNG_URL ?? "http://127.0.0.1:8888"}/search`;
 
 export default function webSearchExtension(pi: ExtensionAPI) {
   pi.registerTool({
