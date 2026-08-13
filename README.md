@@ -1,0 +1,63 @@
+# pane
+
+**pane** — a clear pane for [pi](https://github.com/earendil-works/pi). Flat chrome, status glyphs, honest state. For you and your agent: same glass, both sides.
+
+No fork. Nine extensions on stock pi's public hooks; delete any file, get vanilla back.
+
+```
+● bash · $ node --test +1 lines
+  97 passing
+  0.4s
+
+❯ your turn_
+deepseek · max · 57k/393k 15% (auto)      main
+↑2.1k ↓15k · ⛁ R50k 92%
+```
+
+## what's inside
+
+one visual language, both directions. status glyphs `○ ◐ ● ✕` everywhere: tool rows, the todo queue, the prompt itself.
+
+**your side of the glass**
+
+- `builtin-restyle` — bash/read/write/grep/find/ls re-rendered flat: `● tool · detail` headers, head/tail previews with expand hints, durations. execution stays byte-identical stock (renderers swapped, nothing else).
+- `footer` — two rows replacing stock: model · thinking · context (colored past 70/90%), then throughput and cache. pwd dropped; built for phone width.
+- `input` — muted bars, prompt glyph carries state: accent `❯` your turn, dim `◐` agent streaming (typing = queue/steer).
+- `scroll-speed` — fullscreen TUI wheel 3x (`PI_WHEEL_LINES` tunes). touch-scroll on mobile stops crawling.
+- `themes/` — subtle-dark, subtle-light.
+
+**the agent's side**
+
+- `todo` — a concurrent job queue wearing a todo UI. enforced FSM (pending -> in_progress -> done | failed; failed -> retry), minted ids, several tasks in flight, batched transitions serialized against fresh state. illegal transitions return errors that teach the protocol.
+- `python` — persistent IPython kernel; state survives across calls; timeouts kill only their own cell.
+- `web-search` + `web-fetch` — SearXNG search, guarded fetch: DNS refusal of private space with readable errors, redirects re-checked, byte/char caps with loud truncation markers, trafilatura extraction. optional egress proxy for connect-time enforcement.
+- `tool-retry-guard` — 3 consecutive failures of one tool -> a note telling the model to stop retrying blindly.
+- terse promptGuidelines throughout: the model's dashboard is prose-free, like yours.
+
+`AGENTS.md` — the working contract these were built for. take it as a template.
+
+100+ tests, colocated: `cd extensions && node --test *.test.mjs`.
+
+## install
+
+```
+git clone <this repo> && cd pane && npm install   # undici, for web-fetch's proxy path
+pi install /path/to/pane
+```
+
+or copy `extensions/` into `~/.pi/agent/extensions/` and `themes/` into `~/.pi/agent/themes/`.
+
+## bring your own
+
+- **web tools**: web-search expects SearXNG on `127.0.0.1:8888`; web-fetch routes through a proxy at `127.0.0.1:8889` (set `PI_WEB_FETCH_PROXY=` empty to fetch direct). a docker compose for both (searxng + tinyproxy + DOCKER-USER egress firewall) is the recommended pairing.
+- **python kernel**: expects a venv at `~/.pi/agent/kernel-venv` and `kernel/kernel_host.py` at `~/.pi/agent/kernel/` (copy from this repo; `python -m venv` + `pip install ipython numpy pandas`).
+- **trafilatura** on PATH upgrades web-fetch extraction; falls back to built-in tag-strip.
+
+## caveats
+
+- `builtin-restyle` and `scroll-speed` touch pi 0.84.1 exported internals. a pi update may wobble them; failure mode is stock look or a loud load error, never silent breakage. delete the file, restyle gone.
+- cross-process todo writes (two pi sessions, same cwd) are last-writer-wins; atomic renames prevent corruption, not lost updates.
+
+## philosophy
+
+lean both sides of the glass. every tool costs context, context costs tok/s, and fluff in a prompt is the same failure as clutter in a UI. state should be visible at a glance, transitions should be legal or loudly refused, and the chrome should be the thing you see through without noticing it's there.

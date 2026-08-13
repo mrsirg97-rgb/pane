@@ -1,0 +1,228 @@
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { Type } from "typebox";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { errorText, header, preview } from "./_render-kit.mjs";
+
+export const KERNEL_PYTHON = join(homedir(), ".pi/agent/kernel-venv/bin/python");
+export const KERNEL_HOST = join(homedir(), ".pi/agent/kernel/kernel_host.py");
+const DEFAULT_TIMEOUT_MS = 120_000;
+const STDERR_TAIL = 4096;
+
+type Reply = {
+  id: string | null;
+  ok: boolean;
+  out?: string;
+  err?: string;
+  result?: string | null;
+  error?: string | null;
+};
+
+export class Kernel {
+  private proc: ChildProcessWithoutNullStreams | null = null;
+  private buf = "";
+  private stderrTail = "";
+  private pending = new Map<string, (r: Reply) => void>();
+  private seq = 0;
+  private queue: Promise<void> = Promise.resolve();
+
+  private failAll(message: string) {
+    for (const [, resolve] of this.pending) {
+      resolve({ id: null, ok: false, error: message });
+    }
+    this.pending.clear();
+  }
+
+  private start() {
+    const proc = spawn(KERNEL_PYTHON, [KERNEL_HOST], { stdio: ["pipe", "pipe", "pipe"] });
+    proc.stdout.setEncoding("utf8");
+    proc.stderr.setEncoding("utf8");
+    proc.stdout.on("data", (chunk: string) => {
+      this.buf += chunk;
+      let nl: number;
+      while ((nl = this.buf.indexOf("\n")) >= 0) {
+        const line = this.buf.slice(0, nl).trim();
+        this.buf = this.buf.slice(nl + 1);
+        if (!line) continue;
+        try {
+          const reply = JSON.parse(line) as Reply;
+          const resolve = reply.id ? this.pending.get(reply.id) : undefined;
+          if (reply.id) this.pending.delete(reply.id);
+          resolve?.(reply);
+        } catch {
+          /* a non-protocol line means the host printed junk; ignore it */
+        }
+      }
+    });
+    proc.stderr.on("data", (chunk: string) => {
+      this.stderrTail = (this.stderrTail + chunk).slice(-STDERR_TAIL);
+    });
+    const isCurrent = () => this.proc === proc;
+    proc.on("error", (err) => {
+      if (!isCurrent()) return;
+      this.failAll(`kernel failed to start: ${err.message}`);
+      this.proc = null;
+    });
+    proc.on("exit", (code) => {
+      if (!isCurrent()) return;
+      const tail = this.stderrTail.trim();
+      this.failAll(`kernel exited (code ${code})` + (tail ? `\n[stderr]\n${tail}` : ""));
+      this.proc = null;
+    });
+    proc.stdin.on("error", () => {});
+    this.proc = proc;
+  }
+
+  private teardown(message: string) {
+    const proc = this.proc;
+    this.proc = null;
+    this.buf = "";
+    this.stderrTail = "";
+    this.failAll(message);
+    proc?.kill("SIGKILL");
+  }
+
+  restart() {
+    this.teardown("kernel was restarted; all variables are gone");
+  }
+
+  shutdown() {
+    this.teardown("kernel shut down");
+  }
+
+  /** One request in flight at a time. The kernel executes serially anyway, so queueing
+   *  costs nothing and buys two things: a timeout can only ever kill its own cell (it used
+   *  to restart the kernel under a sibling call and report its variables gone), and a
+   *  timer starts when the cell is actually written, not while it waits behind another. */
+  async send(payload: Record<string, unknown>, timeoutMs: number): Promise<Reply> {
+    const turn = this.queue;
+    let release!: () => void;
+    this.queue = new Promise<void>((r) => (release = r));
+    await turn;
+    try {
+      return await this.dispatch(payload, timeoutMs);
+    } finally {
+      release();
+    }
+  }
+
+  private async dispatch(payload: Record<string, unknown>, timeoutMs: number): Promise<Reply> {
+    if (!this.proc) this.start();
+    const id = String(++this.seq);
+    const wait = new Promise<Reply>((resolve) => this.pending.set(id, resolve));
+    try {
+      this.proc!.stdin.write(JSON.stringify({ ...payload, id }) + "\n");
+    } catch (err) {
+      // The cell never reached the kernel, so no reply is coming. Answer now instead of
+      // leaving the caller to discover it via the full timeout.
+      this.pending.delete(id);
+      const message = err instanceof Error ? err.message : String(err);
+      return { id, ok: false, error: `kernel is not writable: ${message}` };
+    }
+
+    let timer: NodeJS.Timeout;
+    const timeout = new Promise<Reply>((resolve) => {
+      timer = setTimeout(() => {
+        resolve({
+          id,
+          ok: false,
+          error:
+            `timed out after ${Math.round(timeoutMs / 1000)}s; kernel was restarted ` +
+            `and all variables are gone. Re-run setup, or pass a larger timeoutMs.`,
+        });
+        this.restart();
+      }, timeoutMs);
+    });
+    const reply = await Promise.race([wait, timeout]);
+    clearTimeout(timer!);
+    return reply;
+  }
+}
+
+function render(r: Reply): string {
+  const parts: string[] = [];
+  if (r.out?.trim()) parts.push(r.out.trimEnd());
+  if (r.err?.trim()) parts.push(`[stderr]\n${r.err.trimEnd()}`);
+  if (r.error) parts.push(`[error]\n${r.error}`);
+  if (r.result && !r.out?.includes(r.result)) parts.push(r.result);
+  return parts.join("\n") || (r.ok ? "(no output)" : "(failed, no output)");
+}
+
+export default function pythonKernelExtension(pi: ExtensionAPI) {
+  const kernel = new Kernel();
+  pi.on("session_shutdown", () => kernel.shutdown());
+  pi.registerTool({
+    name: "python",
+    label: "Python",
+    description:
+      "Run Python in a persistent IPython session. Variables, imports and definitions " +
+      "persist across calls, so build state up incrementally. numpy and pandas are " +
+      "available; IPython magics (%timeit, %run) work. action='vars' lists the current " +
+      "namespace, action='reset' clears it.",
+    promptSnippet: "Run Python in a persistent session; state persists across calls",
+    promptGuidelines: [
+      "arithmetic, data shaping, parsing, bulk text -> compute in python, don't estimate.",
+      "state persists; compute once, query it in later calls.",
+    ],
+    parameters: Type.Object({
+      code: Type.Optional(Type.String({ description: "Python source to execute" })),
+      action: Type.Optional(
+        Type.Union([Type.Literal("vars"), Type.Literal("reset")], {
+          description: "'vars' summarises the namespace, 'reset' clears it. Omit to run code.",
+        }),
+      ),
+      timeoutMs: Type.Optional(
+        Type.Integer({ description: "Timeout in ms (default 120000)", minimum: 1000 }),
+      ),
+    }),
+    renderShell: "self",
+    renderCall(args: any, theme, ctx) {
+      const codeLines = (args?.code ?? "").split("\n").filter((l: string) => l.trim());
+      const detail = args?.action
+        ? theme.fg("text", args.action)
+        : codeLines.length
+          ? theme.fg("muted", `${codeLines.length} ${codeLines.length === 1 ? "line" : "lines"}`)
+          : undefined;
+      const head = header(theme, ctx, "python", detail);
+      if (!codeLines.length) return head;
+      const code = codeLines.map((l: string) => theme.fg("mdCode", l)).join("\n");
+      const body = preview(theme, ctx, code, { lines: 4, keep: "head" });
+      return {
+        render: (width: number) => [...head.render(width), ...body.render(width)],
+        invalidate: () => body.invalidate?.(),
+      };
+    },
+    renderResult(result, _options, theme, ctx) {
+      if (result.isError && !result.content?.some((c: any) => c.type === "text" && c.text.trim())) {
+        return errorText(theme, result);
+      }
+      const raw = (result.content ?? [])
+        .map((c: any) => (c.type === "text" ? c.text : ""))
+        .join("");
+      const styled = raw
+        .split("\n")
+        .map((line: string) =>
+          line === "[stderr]" || line === "[error]"
+            ? theme.fg(line === "[error]" ? "error" : "warning", line)
+            : theme.fg("toolOutput", line),
+        )
+        .join("\n");
+      return preview(theme, ctx, styled, { lines: 8, keep: "tail" });
+    },
+    async execute(_toolCallId, params: any) {
+      const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      const payload = params.action ? { cmd: params.action } : { code: params.code ?? "" };
+      if (!params.action && !params.code?.trim()) {
+        return { content: [{ type: "text", text: "no code supplied" }], isError: true };
+      }
+      const reply = await kernel.send(payload, timeoutMs);
+      const text = render(reply);
+      return {
+        content: [{ type: "text", text }],
+        isError: !reply.ok,
+        details: { ok: reply.ok, error: reply.error ?? null },
+      };
+    },
+  });
+}

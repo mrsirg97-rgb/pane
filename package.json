@@ -1,0 +1,22 @@
+{
+  "name": "pane",
+  "version": "0.1.0",
+  "description": "A clear pane for pi. Flat chrome, status glyphs, honest state.",
+  "private": true,
+  "pi": {
+    "extensions": [
+      "extensions/builtin-restyle.ts",
+      "extensions/footer.ts",
+      "extensions/input.ts",
+      "extensions/scroll-speed.ts",
+      "extensions/todo.ts",
+      "extensions/python-kernel.ts",
+      "extensions/web-search.ts",
+      "extensions/web-fetch.ts",
+      "extensions/tool-retry-guard.ts"
+    ]
+  },
+  "dependencies": {
+    "undici": "^7.0.0"
+  }
+}
