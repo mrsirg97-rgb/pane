@@ -34,9 +34,10 @@ function rendered(component, width = 60) {
   return component.render(width).join("\n");
 }
 
-test("all six built-ins are overridden with self shell and intact execution", () => {
+test("all seven built-ins are overridden with self shell and intact execution", () => {
   assert.deepEqual([...tools.keys()].sort(), [
     "bash",
+    "edit",
     "find",
     "grep",
     "ls",
@@ -148,6 +149,69 @@ test("write, grep, find, ls calls carry their key argument", () => {
   );
   assert.match(at("find", { pattern: "*.test.mjs" }), /● find · \*\.test\.mjs/);
   assert.match(at("ls", { path: "/home/ng/Projects" }), /● ls · \./);
+});
+
+test("write result previews the written content, capped at 15 lines", () => {
+  const write = tools.get("write");
+  const content = Array.from({ length: 20 }, (_, i) => `w${i + 1}`).join("\n");
+  const c = ctx();
+  write.renderCall({ path: "/home/ng/Projects/x.ts", content }, theme, c);
+  const out = rendered(
+    write.renderResult(
+      textResult("Wrote 20 lines"),
+      { expanded: false, isPartial: false },
+      theme,
+      c,
+    ),
+  );
+  assert.match(out, /w1\b/);
+  assert.match(out, /w15\b/);
+  assert.doesNotMatch(out, /w16\b/);
+  assert.match(out, /\+5 lines/);
+  assert.doesNotMatch(out, /Wrote 20 lines/);
+});
+
+test("edit call carries path and edit count; result renders the diff", () => {
+  const edit = tools.get("edit");
+  const args = {
+    path: "/home/ng/Projects/x.ts",
+    edits: [
+      { oldText: "a", newText: "b" },
+      { oldText: "c", newText: "d" },
+    ],
+  };
+  const c = ctx();
+  assert.match(
+    rendered(edit.renderCall(args, theme, c)),
+    /● edit · x\.ts 2 edits/,
+  );
+  const single = rendered(
+    edit.renderCall({ ...args, edits: [args.edits[0]] }, theme, ctx()),
+  );
+  assert.match(single, /1 edit\b/);
+  const out = rendered(
+    edit.renderResult(
+      textResult("ok", { details: { diff: "-1 old line\n+1 new line" } }),
+      { expanded: false, isPartial: false },
+      theme,
+      c,
+    ),
+  );
+  assert.match(out, /-1 old line/);
+  assert.match(out, /\+1 new line/);
+});
+
+test("edit result without a diff falls back to the result text", () => {
+  const edit = tools.get("edit");
+  const out = rendered(
+    edit.renderResult(
+      textResult("nothing to do"),
+      { expanded: false, isPartial: false },
+      theme,
+      ctx(),
+    ),
+  );
+  assert.match(out, /nothing to do/);
 });
 
 test("errors render as error text, width 34 stays intact", () => {

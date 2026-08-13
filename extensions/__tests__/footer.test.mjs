@@ -7,7 +7,7 @@ const { handlers, exports: ext } = await loadExtensionTool(
   join(EXT_DIR, "footer.ts"),
   { requireTool: false },
 );
-const { buildFooterLines, collectUsage, formatTokens } = ext;
+const { buildFooterLines, buildUsageLine, collectUsage, formatTokens } = ext;
 
 const theme = {
   fg: (_color, text) => text,
@@ -23,13 +23,6 @@ function state(over = {}) {
     reasoning: true,
     thinkingLevel: "max",
     contextUsage: { tokens: 57_000, contextWindow: 393_216, percent: 14.5 },
-    usage: {
-      input: 2100,
-      output: 15_400,
-      cacheRead: 50_000,
-      cacheWrite: 3000,
-      cacheHitRate: 92.3,
-    },
     branch: "main",
     autoCompact: true,
     statuses: [],
@@ -62,18 +55,39 @@ test("row one drops branch when narrow, hides thinking for non-reasoning models"
   assert.doesNotMatch(plain, /max/);
 });
 
-test("row two: throughput and cache only, context lives on row one", () => {
-  const [, stats] = buildFooterLines(state(), theme, 80);
+test("usage line: throughput and cache, plain-text cache label", () => {
+  const stats = buildUsageLine(
+    {
+      input: 2100,
+      output: 15_400,
+      cacheRead: 50_000,
+      cacheWrite: 3000,
+      cacheHitRate: 92.3,
+    },
+    theme,
+    80,
+  );
   assert.doesNotMatch(stats, /393k/);
   assert.match(stats, /↑2\.1k ↓15k/);
-  assert.match(stats, /⛁ R50k W3\.0k 92%/);
+  assert.match(stats, /cache R50k W3\.0k 92%/);
+  assert.doesNotMatch(stats, /⛁/);
 });
 
-test("unknown tokens after compaction; empty stats row is dropped", () => {
+test("usage line is null when nothing has been spent", () => {
+  assert.equal(
+    buildUsageLine(
+      { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      theme,
+      80,
+    ),
+    null,
+  );
+});
+
+test("unknown tokens after compaction render as ?", () => {
   const lines = buildFooterLines(
     state({
       contextUsage: { tokens: null, contextWindow: 393_216, percent: null },
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       autoCompact: false,
       branch: null,
     }),
@@ -85,15 +99,15 @@ test("unknown tokens after compaction; empty stats row is dropped", () => {
   assert.doesNotMatch(lines[0], /auto/);
 });
 
-test("statuses appear as a third row only when present", () => {
-  assert.equal(buildFooterLines(state(), theme, 80).length, 2);
+test("statuses appear as a second row only when present", () => {
+  assert.equal(buildFooterLines(state(), theme, 80).length, 1);
   const lines = buildFooterLines(
     state({ statuses: ["guard: idle"] }),
     theme,
     80,
   );
-  assert.equal(lines.length, 3);
-  assert.match(lines[2], /guard: idle/);
+  assert.equal(lines.length, 2);
+  assert.match(lines[1], /guard: idle/);
 });
 
 test("collectUsage sums entries and tracks the latest cache hit rate", () => {
@@ -137,8 +151,10 @@ test("collectUsage sums entries and tracks the latest cache hit rate", () => {
   assert.equal(Math.round(usage.cacheHitRate), 90);
 });
 
-test("session_start wires a live footer through ctx.ui.setFooter", () => {
+test("session_start wires the footer below and the usage widget above input", () => {
   let factory = null;
+  let widget = null;
+  let widgetOptions = null;
   const entries = [
     {
       type: "message",
@@ -150,7 +166,14 @@ test("session_start wires a live footer through ctx.ui.setFooter", () => {
   ];
   const ctx = {
     mode: "tui",
-    ui: { setFooter: (f) => (factory = f) },
+    ui: {
+      setFooter: (f) => (factory = f),
+      setWidget: (key, f, options) => {
+        assert.equal(key, "pane-usage");
+        widget = f;
+        widgetOptions = options;
+      },
+    },
     model: { id: "deepriver", reasoning: true },
     thinkingLevel: "max",
     getContextUsage: () => ({
@@ -162,24 +185,49 @@ test("session_start wires a live footer through ctx.ui.setFooter", () => {
   };
   handlers.session_start({}, ctx);
   assert.ok(factory, "footer factory registered");
+  assert.ok(widget, "usage widget registered");
+  assert.deepEqual(widgetOptions, { placement: "aboveEditor" });
   const footerData = {
     getGitBranch: () => "main",
     getExtensionStatuses: () => new Map(),
   };
   const lines = factory({}, theme, footerData).render(60);
-  assert.equal(lines.length, 2);
+  assert.equal(lines.length, 1);
   assert.match(lines[0], /deepriver · max · 57k\/393k 15%/);
-  assert.match(lines[1], /↑100 ↓50/);
+  const widgetLines = widget({}, theme).render(60);
+  assert.equal(widgetLines.length, 1);
+  assert.match(widgetLines[0], /↑100 ↓50/);
+  assert.match(widgetLines[0], /cache R300 W20/);
   ctx.model = { id: "qwen3.6-27b", reasoning: false };
   handlers.model_select({}, ctx);
   assert.match(factory({}, theme, footerData).render(60)[0], /qwen3\.6-27b/);
 });
 
-test("non-tui sessions leave the footer alone", () => {
+test("usage widget renders nothing before any usage lands", () => {
+  let widget = null;
+  const ctx = {
+    mode: "tui",
+    ui: { setFooter: () => {}, setWidget: (_key, f) => (widget = f) },
+    model: { id: "deepriver", reasoning: true },
+    thinkingLevel: "max",
+    getContextUsage: () => undefined,
+    sessionManager: { getEntries: () => [] },
+  };
+  handlers.session_start({}, ctx);
+  assert.deepEqual(widget({}, theme).render(60), []);
+});
+
+test("non-tui sessions leave the footer and widgets alone", () => {
   let called = false;
   handlers.session_start(
     {},
-    { mode: "print", ui: { setFooter: () => (called = true) } },
+    {
+      mode: "print",
+      ui: {
+        setFooter: () => (called = true),
+        setWidget: () => (called = true),
+      },
+    },
   );
   assert.equal(called, false);
 });

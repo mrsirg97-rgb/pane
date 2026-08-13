@@ -70,7 +70,6 @@ type FooterState = {
   contextUsage:
     | { tokens: number | null; contextWindow: number; percent: number | null }
     | undefined;
-  usage: Usage;
   branch: string | null;
   autoCompact: boolean;
   statuses: string[];
@@ -115,41 +114,44 @@ export function buildFooterLines(
     modelLine = truncateToWidth(modelLine, width, "…");
   }
 
-  const parts: string[] = [];
-  if (state.usage.input || state.usage.output) {
-    parts.push(
-      theme.fg(
-        "dim",
-        `↑${formatTokens(state.usage.input)} ↓${formatTokens(state.usage.output)}`,
-      ),
-    );
-  }
-  if (state.usage.cacheRead || state.usage.cacheWrite) {
-    const rate =
-      state.usage.cacheHitRate !== undefined
-        ? ` ${Math.round(state.usage.cacheHitRate)}%`
-        : "";
-    parts.push(
-      theme.fg(
-        "dim",
-        `⛁ R${formatTokens(state.usage.cacheRead)} W${formatTokens(state.usage.cacheWrite)}${rate}`,
-      ),
-    );
-  }
   const lines = [modelLine];
-  if (parts.length) {
-    const stats = parts.join(theme.fg("dim", " · "));
-    // ⛁ has ambiguous Unicode width: some fonts paint it 2 cells while
-    // visibleWidth counts 1. Reserve the difference so the row never clips.
-    const reserve = stats.includes("⛁") ? 1 : 0;
-    lines.push(truncateToWidth(stats, width - reserve, "…"));
-  }
   if (state.statuses.length) {
     lines.push(
       truncateToWidth(theme.fg("dim", state.statuses.join(" ")), width, "…"),
     );
   }
   return lines;
+}
+
+/** The throughput/cache stats row, shown above the input. Null when no usage yet. */
+export function buildUsageLine(
+  usage: Usage,
+  theme: any,
+  width: number,
+): string | null {
+  const parts: string[] = [];
+  if (usage.input || usage.output) {
+    parts.push(
+      theme.fg(
+        "dim",
+        `↑${formatTokens(usage.input)} ↓${formatTokens(usage.output)}`,
+      ),
+    );
+  }
+  if (usage.cacheRead || usage.cacheWrite) {
+    const rate =
+      usage.cacheHitRate !== undefined
+        ? ` ${Math.round(usage.cacheHitRate)}%`
+        : "";
+    parts.push(
+      theme.fg(
+        "dim",
+        `cache R${formatTokens(usage.cacheRead)} W${formatTokens(usage.cacheWrite)}${rate}`,
+      ),
+    );
+  }
+  if (!parts.length) return null;
+  return truncateToWidth(parts.join(theme.fg("dim", " · ")), width, "…");
 }
 
 function autoCompactFromSettings(): boolean {
@@ -177,6 +179,22 @@ export default function footerExtension(pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     live.ctx = ctx;
     if (ctx.mode !== "tui") return;
+    ctx.ui.setWidget(
+      "pane-usage",
+      (_tui: any, theme: any) => ({
+        render(width: number) {
+          const current = live.ctx;
+          if (!current) return [];
+          const usage = collectUsage(
+            current.sessionManager.getEntries() as any[],
+          );
+          const line = buildUsageLine(usage, theme, width);
+          return line === null ? [] : [line];
+        },
+        invalidate() {},
+      }),
+      { placement: "aboveEditor" },
+    );
     ctx.ui.setFooter((_tui, theme, footerData) => ({
       render(width: number) {
         const current = live.ctx;
@@ -187,7 +205,6 @@ export default function footerExtension(pi: ExtensionAPI) {
           reasoning: current.model?.reasoning ?? false,
           thinkingLevel: String(current.thinkingLevel ?? "off"),
           contextUsage: current.getContextUsage(),
-          usage: collectUsage(current.sessionManager.getEntries() as any[]),
           branch: footerData.getGitBranch(),
           autoCompact,
           statuses: Array.from(footerData.getExtensionStatuses().values()),

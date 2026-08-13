@@ -5,6 +5,7 @@ import { Text } from "@earendil-works/pi-tui";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   createBashToolDefinition,
+  createEditToolDefinition,
   createFindToolDefinition,
   createGrepToolDefinition,
   createLsToolDefinition,
@@ -35,6 +36,19 @@ export function shortPath(path: string | undefined, cwd: string): string {
   return out;
 }
 
+/** Line-colored diff via the passed theme; the built-in renderDiff needs the
+ *  interactive theme singleton, which only exists inside a live TUI. */
+export function styleDiff(diff: string, theme: any): string {
+  return diff
+    .split("\n")
+    .map((line) => {
+      if (line.startsWith("+")) return theme.fg("toolDiffAdded", line);
+      if (line.startsWith("-")) return theme.fg("toolDiffRemoved", line);
+      return theme.fg("toolDiffContext", line);
+    })
+    .join("\n");
+}
+
 function resultText(result: any): string {
   return ((result.content ?? []) as any[])
     .map((c) => (c.type === "text" ? c.text : ""))
@@ -47,12 +61,15 @@ function body(
   ctx: any,
   result: any,
   opts: { lines: number; keep: "head" | "tail" },
+  override?: string,
 ) {
   if (result.isError) return errorText(theme, result);
-  const styled = resultText(result)
-    .split("\n")
-    .map((line: string) => theme.fg("toolOutput", line))
-    .join("\n");
+  const styled =
+    override ??
+    resultText(result)
+      .split("\n")
+      .map((line: string) => theme.fg("toolOutput", line))
+      .join("\n");
   return preview(theme, ctx, styled, opts);
 }
 
@@ -61,6 +78,7 @@ type Restyle = {
   detail: (args: any, theme: any, cwd: string) => string | undefined;
   view: { lines: number; keep: "head" | "tail" };
   timed?: boolean;
+  body?: (args: any, result: any, theme: any) => string | undefined;
 };
 
 function restyles(cwd: string, s: Record<string, any>): Restyle[] {
@@ -107,7 +125,7 @@ function restyles(cwd: string, s: Record<string, any>): Restyle[] {
     },
     {
       def: createWriteToolDefinition(cwd),
-      view: { lines: 3, keep: "head" },
+      view: { lines: 15, keep: "head" },
       detail(args, theme, c) {
         if (!args?.path) return undefined;
         const lines =
@@ -118,6 +136,32 @@ function restyles(cwd: string, s: Record<string, any>): Restyle[] {
           theme.fg("text", shortPath(args.path, c)) +
           (lines ? theme.fg("muted", ` ${lines} lines`) : "")
         );
+      },
+      body(args, _result, theme) {
+        if (typeof args?.content !== "string" || !args.content.trim())
+          return undefined;
+        return args.content
+          .split("\n")
+          .map((line: string) => theme.fg("toolOutput", line))
+          .join("\n");
+      },
+    },
+    {
+      def: createEditToolDefinition(cwd),
+      view: { lines: 15, keep: "head" },
+      detail(args, theme, c) {
+        if (!args?.path) return undefined;
+        const n = Array.isArray(args.edits) ? args.edits.length : 0;
+        return (
+          theme.fg("text", shortPath(args.path, c)) +
+          (n ? theme.fg("muted", ` ${n} edit${n === 1 ? "" : "s"}`) : "")
+        );
+      },
+      body(_args, result, theme) {
+        const diff = result?.details?.diff;
+        return typeof diff === "string" && diff
+          ? styleDiff(diff, theme)
+          : undefined;
       },
     },
     {
@@ -156,13 +200,14 @@ function restyles(cwd: string, s: Record<string, any>): Restyle[] {
 export default function builtinRestyleExtension(pi: ExtensionAPI) {
   const cwd = process.cwd();
   const s = piSettings();
-  for (const { def, detail, view, timed } of restyles(cwd, s)) {
+  for (const { def, detail, view, timed, body: bodyFn } of restyles(cwd, s)) {
     pi.registerTool({
       ...def,
       renderShell: "self",
       renderCall(args: any, theme: any, ctx: any) {
         if (timed && ctx.executionStarted && ctx.state.startedAt === undefined)
           ctx.state.startedAt = Date.now();
+        ctx.state.args = args;
         return header(theme, ctx, def.name, detail(args, theme, ctx.cwd));
       },
       renderResult(result: any, options: any, theme: any, ctx: any) {
@@ -174,7 +219,13 @@ export default function builtinRestyleExtension(pi: ExtensionAPI) {
         ) {
           ctx.state.endedAt = Date.now();
         }
-        const output = body(theme, ctx, result, view);
+        const output = body(
+          theme,
+          ctx,
+          result,
+          view,
+          bodyFn?.(ctx.state.args, result, theme),
+        );
         if (!timed || ctx.state.startedAt === undefined) return output;
         const ms = (ctx.state.endedAt ?? Date.now()) - ctx.state.startedAt;
         return stack(
