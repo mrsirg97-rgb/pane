@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { loadExtensionTool, EXT_DIR } from "./_test-helpers.mjs";
 
-const { handlers } = await loadExtensionTool(join(EXT_DIR, "input.ts"), { requireTool: false });
+const { handlers } = await loadExtensionTool(join(EXT_DIR, "input.ts"), {
+  requireTool: false,
+});
 
 const fakeTui = { terminal: { rows: 30, cols: 80 }, requestRender() {} };
 const editorTheme = { borderColor: (s) => s, selectList: {} };
@@ -35,7 +37,11 @@ test("muted bars frame the input and the glyph leads the first content line", ()
   editor.setText("hello world");
   const rows = editor.render(40);
   assert.match(rows[0], /<borderMuted>─+/, "top bar painted muted");
-  assert.match(rows[rows.length - 1], /<borderMuted>─+/, "bottom bar painted muted");
+  assert.match(
+    rows[rows.length - 1],
+    /<borderMuted>─+/,
+    "bottom bar painted muted",
+  );
   assert.match(rows[1], /<accent>❯ /);
   assert.match(bare(rows).join("\n"), /hello world/);
 });
@@ -84,6 +90,15 @@ test("narrow width renders without crashing and keeps the glyph", () => {
 
 test("non-tui sessions leave the editor alone", () => {
   let called = false;
-  handlers.session_start({}, { mode: "print", ui: { setEditorComponent: () => (called = true), theme: { fg: (c, t) => t } } });
+  handlers.session_start(
+    {},
+    {
+      mode: "print",
+      ui: {
+        setEditorComponent: () => (called = true),
+        theme: { fg: (c, t) => t },
+      },
+    },
+  );
   assert.equal(called, false);
 });

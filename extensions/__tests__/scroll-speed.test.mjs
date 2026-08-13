@@ -44,8 +44,15 @@ test("factor 1 and missing routeWheel are no-ops", () => {
 test("extension patches the real TuiAltScreen prototype", async () => {
   const { PI_PKG } = await import("./_test-helpers.mjs");
   const { pathToFileURL } = await import("node:url");
-  const tui = await import(pathToFileURL(join(PI_PKG, "node_modules/@earendil-works/pi-tui/dist/index.js")).href);
+  const tui = await import(
+    pathToFileURL(
+      join(PI_PKG, "node_modules/@earendil-works/pi-tui/dist/index.js"),
+    ).href
+  );
   const factory = typeof ext.default === "function" ? ext.default : ext;
   factory({});
-  assert.equal(tui.TuiAltScreen.prototype[Symbol.for("pi.scrollSpeedBoost")], true);
+  assert.equal(
+    tui.TuiAltScreen.prototype[Symbol.for("pi.scrollSpeedBoost")],
+    true,
+  );
 });

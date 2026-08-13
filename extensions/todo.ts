@@ -13,25 +13,46 @@ const DIR = join(homedir(), ".pi/agent/todos");
 type Status = "pending" | "in_progress" | "done" | "failed";
 type Task = { id: string; text: string; status: Status };
 
-const ACTION = StringEnum(["create", "start", "complete", "fail", "retry", "read"] as const);
-const MARK: Record<Status, string> = { pending: "[ ]", in_progress: "[~]", done: "[x]", failed: "[!]" };
+const ACTION = StringEnum([
+  "create",
+  "start",
+  "complete",
+  "fail",
+  "retry",
+  "read",
+] as const);
+const MARK: Record<Status, string> = {
+  pending: "[ ]",
+  in_progress: "[~]",
+  done: "[x]",
+  failed: "[!]",
+};
 
 function storePath(): string {
-  const key = createHash("sha1").update(process.cwd()).digest("hex").slice(0, 12);
+  const key = createHash("sha1")
+    .update(process.cwd())
+    .digest("hex")
+    .slice(0, 12);
   return join(DIR, `${key}.json`);
 }
 
 function load(): Task[] {
   try {
-    const raw = JSON.parse(readFileSync(storePath(), "utf8")) as Record<string, unknown>[];
+    const raw = JSON.parse(readFileSync(storePath(), "utf8")) as Record<
+      string,
+      unknown
+    >[];
     const tasks: Task[] = raw.map((e, i) => ({
       id: typeof e.id === "string" ? e.id : `t${i + 1}`,
       text: String(e.text ?? e.task ?? ""),
-      status: (["pending", "in_progress", "done", "failed"].includes(e.status as string)
+      status: (["pending", "in_progress", "done", "failed"].includes(
+        e.status as string,
+      )
         ? e.status
         : "pending") as Status,
     }));
-    if (raw.some((e) => typeof e.id !== "string" || e.task !== undefined)) save(tasks);
+    if (raw.some((e) => typeof e.id !== "string" || e.task !== undefined))
+      save(tasks);
     return tasks;
   } catch {
     return [];
@@ -88,10 +109,21 @@ function renderQueue(theme: any, tasks: Task[]): string {
   const next = tasks.find((t) => t.status === "pending");
   const head =
     `${progressBar(theme, done, tasks.length)} ` +
-    theme.fg("muted", `${done}/${tasks.length}` + (next ? ` · next ${next.id}` : done === tasks.length ? " · all done" : ""));
+    theme.fg(
+      "muted",
+      `${done}/${tasks.length}` +
+        (next
+          ? ` · next ${next.id}`
+          : done === tasks.length
+            ? " · all done"
+            : ""),
+    );
   const rows = tasks.map((t) => {
     const [glyph, color] = TASK_GLYPH[t.status];
-    const text = t.status === "done" ? theme.fg("dim", t.text) : theme.fg(t.status === "failed" ? "error" : "text", t.text);
+    const text =
+      t.status === "done"
+        ? theme.fg("dim", t.text)
+        : theme.fg(t.status === "failed" ? "error" : "text", t.text);
     return `${theme.fg(color, glyph)} ${theme.fg("dim", t.id)} ${text}`;
   });
   return [head, ...rows].join("\n");
@@ -103,7 +135,10 @@ function render(tasks: Task[]): string {
   const failed = tasks.filter((t) => t.status === "failed").length;
   const next = tasks.find((t) => t.status === "pending");
   const lines = tasks.map((t) => `  ${t.id} ${MARK[t.status]} ${t.text}`);
-  const head = `${done}/${tasks.length} done` + (next ? ` · next: ${next.id}` : "") + (failed ? ` · ${failed} failed` : "");
+  const head =
+    `${done}/${tasks.length} done` +
+    (next ? ` · next: ${next.id}` : "") +
+    (failed ? ` · ${failed} failed` : "");
   return `${head}\n${lines.join("\n")}`;
 }
 
@@ -128,11 +163,21 @@ export default function todoExtension(pi: ExtensionAPI) {
       action: ACTION,
       tasks: Type.Optional(
         Type.Array(
-          Type.Object({ text: Type.String({ description: "What needs doing" }) }),
-          { description: "Full replacement queue. Required when action='create'." },
+          Type.Object({
+            text: Type.String({ description: "What needs doing" }),
+          }),
+          {
+            description:
+              "Full replacement queue. Required when action='create'.",
+          },
         ),
       ),
-      id: Type.Optional(Type.String({ description: "Task id as shown by the tool. Required for start/complete/fail/retry." })),
+      id: Type.Optional(
+        Type.String({
+          description:
+            "Task id as shown by the tool. Required for start/complete/fail/retry.",
+        }),
+      ),
     }),
     renderShell: "self",
     renderCall(args: any, theme, ctx) {
@@ -146,14 +191,18 @@ export default function todoExtension(pi: ExtensionAPI) {
     },
     renderResult(result, _options, theme, _ctx) {
       if (result.isError) return errorText(theme, result);
-      const tasks = (result.details as { tasks?: Task[] } | undefined)?.tasks ?? [];
+      const tasks =
+        (result.details as { tasks?: Task[] } | undefined)?.tasks ?? [];
       return new Text(indent(renderQueue(theme, tasks)), 0, 0);
     },
     prepareArguments(args) {
       if (!args || typeof args !== "object") return args;
       const input = args as { items?: { task: string }[] };
       if (Array.isArray(input.items)) {
-        return { action: "create", tasks: input.items.map((i) => ({ text: String(i.task) })) };
+        return {
+          action: "create",
+          tasks: input.items.map((i) => ({ text: String(i.task) })),
+        };
       }
       return args;
     },
@@ -162,13 +211,20 @@ export default function todoExtension(pi: ExtensionAPI) {
         const action = params.action;
         const tasks = load();
         const reply = (note?: string) => {
-          const text = [note && `→ ${note}`, render(tasks)].filter(Boolean).join("\n");
-          return { content: [{ type: "text", text }], details: { action, tasks } };
+          const text = [note && `→ ${note}`, render(tasks)]
+            .filter(Boolean)
+            .join("\n");
+          return {
+            content: [{ type: "text", text }],
+            details: { action, tasks },
+          };
         };
 
         if (action === "read") return reply();
         if (action === "create") {
-          const incoming = params.tasks ?? fail("action 'create' requires tasks: array of {text}");
+          const incoming =
+            params.tasks ??
+            fail("action 'create' requires tasks: array of {text}");
           let n = maxIdNum(tasks);
           const created: Task[] = incoming.map((t: { text?: unknown }, i) => ({
             id: `t${++n}`,
@@ -177,13 +233,18 @@ export default function todoExtension(pi: ExtensionAPI) {
           }));
           save(created);
           tasks.splice(0, tasks.length, ...created);
-          return reply(created.length ? `queue replaced with ${created.length} tasks` : "queue cleared");
+          return reply(
+            created.length
+              ? `queue replaced with ${created.length} tasks`
+              : "queue cleared",
+          );
         }
 
         const id = params.id ?? fail(`action '${action}' requires id`);
         const t = find(tasks, id) ?? fail(`no task '${id}'`);
         if (action === "start") {
-          if (t.status === "in_progress") fail(`'${id}' is already in progress`);
+          if (t.status === "in_progress")
+            fail(`'${id}' is already in progress`);
           if (t.status === "done") fail(`'${id}' is done; read-only`);
           if (t.status === "failed") fail(`'${id}' failed; retry it first`);
           t.status = "in_progress";
@@ -192,7 +253,8 @@ export default function todoExtension(pi: ExtensionAPI) {
         }
 
         if (action === "complete") {
-          if (t.status === "pending") fail(`'${id}' is pending; start it first`);
+          if (t.status === "pending")
+            fail(`'${id}' is pending; start it first`);
           if (t.status === "done") fail(`'${id}' is done; read-only`);
           if (t.status === "failed") fail(`'${id}' failed; retry it first`);
           t.status = "done";
@@ -201,7 +263,8 @@ export default function todoExtension(pi: ExtensionAPI) {
         }
 
         if (action === "fail") {
-          if (t.status === "pending") fail(`'${id}' is pending; start it first`);
+          if (t.status === "pending")
+            fail(`'${id}' is pending; start it first`);
           if (t.status === "done") fail(`'${id}' is done; read-only`);
           if (t.status === "failed") fail(`'${id}' is already failed`);
           t.status = "failed";
@@ -209,7 +272,8 @@ export default function todoExtension(pi: ExtensionAPI) {
           return reply(`'${id}' failed`);
         }
 
-        if (t.status !== "failed") fail(`'${id}' is not failed; nothing to retry`);
+        if (t.status !== "failed")
+          fail(`'${id}' is not failed; nothing to retry`);
         t.status = "pending";
         save(tasks);
         return reply(`'${id}' back to pending`);

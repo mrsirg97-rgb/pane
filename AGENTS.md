@@ -30,6 +30,7 @@ think before non-trivial edits, schema changes, state machines. unsure -> discus
 ## workflow
 
 design -> contracts/types -> constraints/failing tests -> implementation -> passing tests.
+
 - design doc first: terse, 2-4 sentences per decision; no em dashes.
 - 3+ steps or multi-file -> todo create before the first edit; start before working; done/fail on finish; concurrent in-flight ok; queue empty when done.
 
@@ -65,6 +66,7 @@ how the user builds, system level down to code level habits, language-agnostic.
 ## systems
 
 scaled out: many nodes, partial failure normal, no shared clock; no single box load-bearing.
+
 - **horizontal first.** identical stateless nodes; state in data tier.
 - **APIs are stateless.** no state past the request; persist before response; any replica serves, restart mid-traffic; sessions in store.
 - **build for fault tolerance and failures.** assume timeouts, crashes, partitions; design happy + partition paths.
@@ -77,6 +79,7 @@ scaled out: many nodes, partial failure normal, no shared clock; no single box l
 ## security
 
 attacker mindset; every new code path is attack surface; design the guard with the feature.
+
 - **authorize at the boundary, not in the body.** validation layer is the guard; declarative layer so paths can't forget.
 - **deny by default.** closed, open explicitly; allowlists > denylists; unknown refused.
 - **fail closed on uncertain state.** stale/warming/missing/unverifiable refuse; default "no".

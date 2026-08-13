@@ -8,9 +8,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-export const EXT_DIR = dirname(fileURLToPath(import.meta.url));
+// __tests__/ lives inside extensions/; EXT_DIR must point at the sources (one level up).
+export const EXT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-const npmRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim();
+const npmRoot = execFileSync("npm", ["root", "-g"], {
+  encoding: "utf8",
+}).trim();
 export const PI_PKG = join(npmRoot, "@earendil-works", "pi-coding-agent");
 const require = createRequire(join(PI_PKG, "package.json"));
 
@@ -25,15 +28,26 @@ const ALIAS = {
   "@sinclair/typebox": typebox,
   "@sinclair/typebox/compile": typeboxCompile,
   "@sinclair/typebox/value": typeboxValue,
-  "@earendil-works/pi-ai": join(PI_PKG, "node_modules/@earendil-works/pi-ai/dist/index.js"),
-  "@earendil-works/pi-tui": join(PI_PKG, "node_modules/@earendil-works/pi-tui/dist/index.js"),
+  "@earendil-works/pi-ai": join(
+    PI_PKG,
+    "node_modules/@earendil-works/pi-ai/dist/index.js",
+  ),
+  "@earendil-works/pi-tui": join(
+    PI_PKG,
+    "node_modules/@earendil-works/pi-tui/dist/index.js",
+  ),
   "@earendil-works/pi-coding-agent": join(PI_PKG, "dist/index.js"),
 };
 
 /** Load an extension module; returns { default: factory, ...exports }. */
 export async function loadExtension(extPath) {
-  const jitiMod = await import(pathToFileURL(join(PI_PKG, "node_modules/jiti/lib/jiti-static.mjs")).href);
-  const jiti = jitiMod.createJiti(import.meta.url, { moduleCache: false, alias: ALIAS });
+  const jitiMod = await import(
+    pathToFileURL(join(PI_PKG, "node_modules/jiti/lib/jiti-static.mjs")).href
+  );
+  const jiti = jitiMod.createJiti(import.meta.url, {
+    moduleCache: false,
+    alias: ALIAS,
+  });
   return jiti.import(extPath);
 }
 
@@ -57,7 +71,8 @@ export async function loadExtensionTool(extPath, { requireTool = true } = {}) {
       handlers[event] = fn;
     },
   });
-  if (requireTool && !tool) throw new Error(`extension ${extPath} did not register a tool`);
+  if (requireTool && !tool)
+    throw new Error(`extension ${extPath} did not register a tool`);
   return { tool, tools, handlers, exports: mod };
 }
 

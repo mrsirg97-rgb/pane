@@ -15,11 +15,11 @@ import { errorText, header, indent, preview, stack } from "./_render-kit.mjs";
 
 const HOME = homedir();
 
-// The session builds its base tools from these settings; the overrides must pass
-// the same ones through or execution would silently diverge from stock pi.
 function piSettings(): Record<string, any> {
   try {
-    return JSON.parse(readFileSync(join(HOME, ".pi/agent/settings.json"), "utf8"));
+    return JSON.parse(
+      readFileSync(join(HOME, ".pi/agent/settings.json"), "utf8"),
+    );
   } catch {
     return {};
   }
@@ -42,7 +42,12 @@ function resultText(result: any): string {
     .trimEnd();
 }
 
-function body(theme: any, ctx: any, result: any, opts: { lines: number; keep: "head" | "tail" }) {
+function body(
+  theme: any,
+  ctx: any,
+  result: any,
+  opts: { lines: number; keep: "head" | "tail" },
+) {
   if (result.isError) return errorText(theme, result);
   const styled = resultText(result)
     .split("\n")
@@ -60,10 +65,15 @@ type Restyle = {
 
 function restyles(cwd: string, s: Record<string, any>): Restyle[] {
   const pathDetail = (args: any, theme: any, c: string) =>
-    args?.path !== undefined || args ? theme.fg("text", shortPath(args?.path, c) || ".") : undefined;
+    args?.path !== undefined || args
+      ? theme.fg("text", shortPath(args?.path, c) || ".")
+      : undefined;
   return [
     {
-      def: createBashToolDefinition(cwd, { commandPrefix: s.shellCommandPrefix, shellPath: s.shellPath }),
+      def: createBashToolDefinition(cwd, {
+        commandPrefix: s.shellCommandPrefix,
+        shellPath: s.shellPath,
+      }),
       timed: true,
       view: { lines: 6, keep: "tail" },
       detail(args, theme) {
@@ -77,14 +87,22 @@ function restyles(cwd: string, s: Record<string, any>): Restyle[] {
       },
     },
     {
-      def: createReadToolDefinition(cwd, { autoResizeImages: s.imageAutoResize }),
+      def: createReadToolDefinition(cwd, {
+        autoResizeImages: s.imageAutoResize,
+      }),
       view: { lines: 4, keep: "head" },
       detail(args, theme, c) {
         if (!args?.path) return undefined;
-        const range = [args.offset !== undefined && `from ${args.offset}`, args.limit !== undefined && `${args.limit} lines`]
+        const range = [
+          args.offset !== undefined && `from ${args.offset}`,
+          args.limit !== undefined && `${args.limit} lines`,
+        ]
           .filter(Boolean)
           .join(" · ");
-        return theme.fg("text", shortPath(args.path, c)) + (range ? theme.fg("muted", ` (${range})`) : "");
+        return (
+          theme.fg("text", shortPath(args.path, c)) +
+          (range ? theme.fg("muted", ` (${range})`) : "")
+        );
       },
     },
     {
@@ -92,8 +110,14 @@ function restyles(cwd: string, s: Record<string, any>): Restyle[] {
       view: { lines: 3, keep: "head" },
       detail(args, theme, c) {
         if (!args?.path) return undefined;
-        const lines = typeof args.content === "string" ? args.content.split("\n").length : undefined;
-        return theme.fg("text", shortPath(args.path, c)) + (lines ? theme.fg("muted", ` ${lines} lines`) : "");
+        const lines =
+          typeof args.content === "string"
+            ? args.content.split("\n").length
+            : undefined;
+        return (
+          theme.fg("text", shortPath(args.path, c)) +
+          (lines ? theme.fg("muted", ` ${lines} lines`) : "")
+        );
       },
     },
     {
@@ -101,8 +125,13 @@ function restyles(cwd: string, s: Record<string, any>): Restyle[] {
       view: { lines: 6, keep: "head" },
       detail(args, theme, c) {
         if (!args?.pattern) return undefined;
-        const where = [shortPath(args.path, c), args.glob].filter(Boolean).join(" ");
-        return theme.fg("text", args.pattern) + (where ? theme.fg("muted", ` in ${where}`) : "");
+        const where = [shortPath(args.path, c), args.glob]
+          .filter(Boolean)
+          .join(" ");
+        return (
+          theme.fg("text", args.pattern) +
+          (where ? theme.fg("muted", ` in ${where}`) : "")
+        );
       },
     },
     {
@@ -110,10 +139,17 @@ function restyles(cwd: string, s: Record<string, any>): Restyle[] {
       view: { lines: 6, keep: "head" },
       detail(args, theme, c) {
         if (!args?.pattern) return undefined;
-        return theme.fg("text", args.pattern) + (args.path ? theme.fg("muted", ` in ${shortPath(args.path, c)}`) : "");
+        return (
+          theme.fg("text", args.pattern) +
+          (args.path ? theme.fg("muted", ` in ${shortPath(args.path, c)}`) : "")
+        );
       },
     },
-    { def: createLsToolDefinition(cwd), view: { lines: 6, keep: "head" }, detail: pathDetail },
+    {
+      def: createLsToolDefinition(cwd),
+      view: { lines: 6, keep: "head" },
+      detail: pathDetail,
+    },
   ];
 }
 
@@ -125,17 +161,26 @@ export default function builtinRestyleExtension(pi: ExtensionAPI) {
       ...def,
       renderShell: "self",
       renderCall(args: any, theme: any, ctx: any) {
-        if (timed && ctx.executionStarted && ctx.state.startedAt === undefined) ctx.state.startedAt = Date.now();
+        if (timed && ctx.executionStarted && ctx.state.startedAt === undefined)
+          ctx.state.startedAt = Date.now();
         return header(theme, ctx, def.name, detail(args, theme, ctx.cwd));
       },
       renderResult(result: any, options: any, theme: any, ctx: any) {
-        if (timed && !options.isPartial && ctx.state.startedAt !== undefined && ctx.state.endedAt === undefined) {
+        if (
+          timed &&
+          !options.isPartial &&
+          ctx.state.startedAt !== undefined &&
+          ctx.state.endedAt === undefined
+        ) {
           ctx.state.endedAt = Date.now();
         }
         const output = body(theme, ctx, result, view);
         if (!timed || ctx.state.startedAt === undefined) return output;
         const ms = (ctx.state.endedAt ?? Date.now()) - ctx.state.startedAt;
-        return stack(output, new Text(indent(theme.fg("dim", `${(ms / 1000).toFixed(1)}s`)), 0, 0));
+        return stack(
+          output,
+          new Text(indent(theme.fg("dim", `${(ms / 1000).toFixed(1)}s`)), 0, 0),
+        );
       },
     });
   }

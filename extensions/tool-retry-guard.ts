@@ -33,7 +33,10 @@ export default function retryGuardExtension(pi: ExtensionAPI) {
             `read it and change the call, or stop calling this tool. Do not retry blindly.`,
         },
       ],
-      details: { ...event.details, retryGuard: { tool: event.toolName, failures: n } },
+      details: {
+        ...event.details,
+        retryGuard: { tool: event.toolName, failures: n },
+      },
     };
   });
 }

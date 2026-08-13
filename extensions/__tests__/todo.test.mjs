@@ -7,7 +7,14 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   loadExtensionTool,
@@ -80,17 +87,26 @@ test("read needs no extra params", () => {
 test("create tasks are schema-checked; missing tasks fails at execute (loud)", async () => {
   // tasks is schema-optional; the cross-field check is runtime and loud
   assert.equal(checkSchema({ action: "create" }), true);
-  await assert.rejects(() => tool.execute("t0", { action: "create" }), /requires tasks/);
+  await assert.rejects(
+    () => tool.execute("t0", { action: "create" }),
+    /requires tasks/,
+  );
   assert.equal(checkSchema({ action: "create", tasks: [] }), true);
   assert.equal(checkSchema({ action: "create", tasks: [{ text: "a" }] }), true);
   assert.equal(checkSchema({ action: "create", tasks: [{}] }), false);
-  assert.equal(checkSchema({ action: "create", tasks: [{ text: "a" }, 1] }), false);
+  assert.equal(
+    checkSchema({ action: "create", tasks: [{ text: "a" }, 1] }),
+    false,
+  );
 });
 
 test("state verbs accept id; id absence fails at execute (loud)", async () => {
   // id is schema-optional; the runtime check is loud
   assert.equal(checkSchema({ action: "start" }), true);
-  await assert.rejects(() => tool.execute("t0", { action: "start" }), /requires id/);
+  await assert.rejects(
+    () => tool.execute("t0", { action: "start" }),
+    /requires id/,
+  );
   assert.equal(checkSchema({ action: "start", id: "t1" }), true);
   for (const a of ["complete", "fail", "retry"]) {
     assert.equal(checkSchema({ action: a, id: "t1" }), true);
@@ -125,7 +141,10 @@ test("create with no tasks clears the queue", async () => {
 // ---- state machine: the user-specified transitions ----
 test("pending -> in_progress -> done; done is read-only", async () => {
   use(cwd1);
-  const created = await tool.execute("t4", { action: "create", tasks: [{ text: "work" }] });
+  const created = await tool.execute("t4", {
+    action: "create",
+    tasks: [{ text: "work" }],
+  });
   const id = firstId(textOf(created));
   const s = await tool.execute("t5", { action: "start", id });
   assert.match(textOf(s), /\[~\] work/);
@@ -133,15 +152,30 @@ test("pending -> in_progress -> done; done is read-only", async () => {
   assert.match(textOf(c), /\[x\] work/);
   assert.match(textOf(c), /1\/1 done/);
 
-  await assert.rejects(() => tool.execute("t7", { action: "start", id }), /read-only/);
-  await assert.rejects(() => tool.execute("t8", { action: "complete", id }), /read-only/);
-  await assert.rejects(() => tool.execute("t9", { action: "fail", id }), /read-only/);
-  await assert.rejects(() => tool.execute("t10", { action: "retry", id }), /not failed/);
+  await assert.rejects(
+    () => tool.execute("t7", { action: "start", id }),
+    /read-only/,
+  );
+  await assert.rejects(
+    () => tool.execute("t8", { action: "complete", id }),
+    /read-only/,
+  );
+  await assert.rejects(
+    () => tool.execute("t9", { action: "fail", id }),
+    /read-only/,
+  );
+  await assert.rejects(
+    () => tool.execute("t10", { action: "retry", id }),
+    /not failed/,
+  );
 });
 
 test("pending -> in_progress -> failed -> retry -> pending -> started again", async () => {
   use(cwd1);
-  const created = await tool.execute("t11", { action: "create", tasks: [{ text: "flaky" }] });
+  const created = await tool.execute("t11", {
+    action: "create",
+    tasks: [{ text: "flaky" }],
+  });
   const id = firstId(textOf(created));
   await tool.execute("t12", { action: "start", id });
   const f = await tool.execute("t13", { action: "fail", id });
@@ -149,11 +183,20 @@ test("pending -> in_progress -> failed -> retry -> pending -> started again", as
   assert.match(textOf(f), /1 failed/);
 
   // failed stays failed on further fail
-  await assert.rejects(() => tool.execute("t14", { action: "fail", id }), /already failed/);
+  await assert.rejects(
+    () => tool.execute("t14", { action: "fail", id }),
+    /already failed/,
+  );
   // start on failed is refused until retry
-  await assert.rejects(() => tool.execute("t15", { action: "start", id }), /retry it first/);
+  await assert.rejects(
+    () => tool.execute("t15", { action: "start", id }),
+    /retry it first/,
+  );
   // complete on failed is refused too
-  await assert.rejects(() => tool.execute("t16", { action: "complete", id }), /retry it first/);
+  await assert.rejects(
+    () => tool.execute("t16", { action: "complete", id }),
+    /retry it first/,
+  );
 
   const ret = await tool.execute("t17", { action: "retry", id });
   assert.match(textOf(ret), /\[ \] flaky/);
@@ -165,15 +208,27 @@ test("pending -> in_progress -> failed -> retry -> pending -> started again", as
 
 test("complete/fail on pending refuse with a hint", async () => {
   use(cwd1);
-  const created = await tool.execute("t20", { action: "create", tasks: [{ text: "wait" }] });
+  const created = await tool.execute("t20", {
+    action: "create",
+    tasks: [{ text: "wait" }],
+  });
   const id = firstId(textOf(created));
-  await assert.rejects(() => tool.execute("t21", { action: "complete", id }), /pending; start it first/);
-  await assert.rejects(() => tool.execute("t22", { action: "fail", id }), /pending; start it first/);
+  await assert.rejects(
+    () => tool.execute("t21", { action: "complete", id }),
+    /pending; start it first/,
+  );
+  await assert.rejects(
+    () => tool.execute("t22", { action: "fail", id }),
+    /pending; start it first/,
+  );
 });
 
 test("unknown id refuses loudly", async () => {
   use(cwd1);
-  await assert.rejects(() => tool.execute("t23", { action: "start", id: "t99" }), /no task 't99'/);
+  await assert.rejects(
+    () => tool.execute("t23", { action: "start", id: "t99" }),
+    /no task 't99'/,
+  );
 });
 
 test("mutation replies never leave a stale .tmp file behind", async () => {
@@ -200,7 +255,10 @@ test("corrupt store reads as empty, never crashes", async () => {
 
 test("lists are isolated per working directory", async () => {
   use(cwd2);
-  await tool.execute("t26", { action: "create", tasks: [{ text: "other ws" }] });
+  await tool.execute("t26", {
+    action: "create",
+    tasks: [{ text: "other ws" }],
+  });
   const r2 = await tool.execute("t27", { action: "read" });
   assert.match(textOf(r2), /other ws/);
   use(cwd1);
@@ -244,7 +302,10 @@ test("legacy resumed args {items} map to create", () => {
   assert.deepEqual(out, { action: "create", tasks: [{ text: "old" }] });
 });
 test("legacy action='set' maps to create", () => {
-  const out = tool.prepareArguments({ action: "set", items: [{ task: "old", status: "done" }] });
+  const out = tool.prepareArguments({
+    action: "set",
+    items: [{ task: "old", status: "done" }],
+  });
   assert.deepEqual(out, { action: "create", tasks: [{ text: "old" }] });
 });
 test("bare legacy {} stays invalid (still an error gradient)", () => {
@@ -267,7 +328,10 @@ test("concurrent create + start land in call order (scheduled, not sleeps)", asy
 
 test("concurrent start + complete keep the documented order (complete waits)", async () => {
   use(cwd1);
-  const created = await tool.execute("t34", { action: "create", tasks: [{ text: "ordered" }] });
+  const created = await tool.execute("t34", {
+    action: "create",
+    tasks: [{ text: "ordered" }],
+  });
   const id = firstId(textOf(created));
   const [started, completed] = await Promise.all([
     tool.execute("t35", { action: "start", id }),

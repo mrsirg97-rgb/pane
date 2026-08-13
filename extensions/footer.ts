@@ -2,10 +2,19 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 
 const THINKING_COLORS = new Set([
-  "thinkingOff", "thinkingMinimal", "thinkingLow", "thinkingMedium", "thinkingHigh", "thinkingXhigh", "thinkingMax",
+  "thinkingOff",
+  "thinkingMinimal",
+  "thinkingLow",
+  "thinkingMedium",
+  "thinkingHigh",
+  "thinkingXhigh",
+  "thinkingMax",
 ]);
 
 export function formatTokens(count: number): string {
@@ -15,7 +24,13 @@ export function formatTokens(count: number): string {
   return `${(count / 1_000_000).toFixed(1)}M`;
 }
 
-type Usage = { input: number; output: number; cacheRead: number; cacheWrite: number; cacheHitRate?: number };
+type Usage = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cacheHitRate?: number;
+};
 
 export function collectUsage(entries: any[]): Usage {
   const totals: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -29,10 +44,19 @@ export function collectUsage(entries: any[]): Usage {
     if (entry.type === "message" && entry.message?.usage) {
       add(entry.message.usage);
       if (entry.message.role === "assistant") {
-        const prompt = entry.message.usage.input + entry.message.usage.cacheRead + entry.message.usage.cacheWrite;
-        totals.cacheHitRate = prompt > 0 ? (entry.message.usage.cacheRead / prompt) * 100 : undefined;
+        const prompt =
+          entry.message.usage.input +
+          entry.message.usage.cacheRead +
+          entry.message.usage.cacheWrite;
+        totals.cacheHitRate =
+          prompt > 0
+            ? (entry.message.usage.cacheRead / prompt) * 100
+            : undefined;
       }
-    } else if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
+    } else if (
+      (entry.type === "branch_summary" || entry.type === "compaction") &&
+      entry.usage
+    ) {
       add(entry.usage);
     }
   }
@@ -43,14 +67,20 @@ type FooterState = {
   modelId: string;
   reasoning: boolean;
   thinkingLevel: string;
-  contextUsage: { tokens: number | null; contextWindow: number; percent: number | null } | undefined;
+  contextUsage:
+    | { tokens: number | null; contextWindow: number; percent: number | null }
+    | undefined;
   usage: Usage;
   branch: string | null;
   autoCompact: boolean;
   statuses: string[];
 };
 
-export function buildFooterLines(state: FooterState, theme: any, width: number): string[] {
+export function buildFooterLines(
+  state: FooterState,
+  theme: any,
+  width: number,
+): string[] {
   const think = state.reasoning
     ? (() => {
         const key = `thinking${state.thinkingLevel[0]?.toUpperCase()}${state.thinkingLevel.slice(1)}`;
@@ -65,23 +95,46 @@ export function buildFooterLines(state: FooterState, theme: any, width: number):
     `${cu?.tokens !== null && cu?.tokens !== undefined ? formatTokens(cu.tokens) : "?"}/${formatTokens(window)}` +
     `${pct !== null ? ` ${pct.toFixed(0)}%` : ""}${state.autoCompact ? " (auto)" : ""}`;
   const ctxPart =
-    pct !== null && pct > 90 ? theme.fg("error", ctxText) : pct !== null && pct > 70 ? theme.fg("warning", ctxText) : theme.fg("dim", ctxText);
+    pct !== null && pct > 90
+      ? theme.fg("error", ctxText)
+      : pct !== null && pct > 70
+        ? theme.fg("warning", ctxText)
+        : theme.fg("dim", ctxText);
 
-  let modelLine = theme.fg("text", theme.bold(state.modelId)) + think + theme.fg("dim", " · ") + ctxPart;
+  let modelLine =
+    theme.fg("text", theme.bold(state.modelId)) +
+    think +
+    theme.fg("dim", " · ") +
+    ctxPart;
   const modelWidth = visibleWidth(modelLine);
   if (state.branch && modelWidth + 2 + visibleWidth(state.branch) <= width) {
-    modelLine += " ".repeat(width - modelWidth - visibleWidth(state.branch)) + theme.fg("dim", state.branch);
+    modelLine +=
+      " ".repeat(width - modelWidth - visibleWidth(state.branch)) +
+      theme.fg("dim", state.branch);
   } else if (modelWidth > width) {
     modelLine = truncateToWidth(modelLine, width, "…");
   }
 
   const parts: string[] = [];
   if (state.usage.input || state.usage.output) {
-    parts.push(theme.fg("dim", `↑${formatTokens(state.usage.input)} ↓${formatTokens(state.usage.output)}`));
+    parts.push(
+      theme.fg(
+        "dim",
+        `↑${formatTokens(state.usage.input)} ↓${formatTokens(state.usage.output)}`,
+      ),
+    );
   }
   if (state.usage.cacheRead || state.usage.cacheWrite) {
-    const rate = state.usage.cacheHitRate !== undefined ? ` ${Math.round(state.usage.cacheHitRate)}%` : "";
-    parts.push(theme.fg("dim", `⛁ R${formatTokens(state.usage.cacheRead)} W${formatTokens(state.usage.cacheWrite)}${rate}`));
+    const rate =
+      state.usage.cacheHitRate !== undefined
+        ? ` ${Math.round(state.usage.cacheHitRate)}%`
+        : "";
+    parts.push(
+      theme.fg(
+        "dim",
+        `⛁ R${formatTokens(state.usage.cacheRead)} W${formatTokens(state.usage.cacheWrite)}${rate}`,
+      ),
+    );
   }
   const lines = [modelLine];
   if (parts.length) {
@@ -92,14 +145,18 @@ export function buildFooterLines(state: FooterState, theme: any, width: number):
     lines.push(truncateToWidth(stats, width - reserve, "…"));
   }
   if (state.statuses.length) {
-    lines.push(truncateToWidth(theme.fg("dim", state.statuses.join(" ")), width, "…"));
+    lines.push(
+      truncateToWidth(theme.fg("dim", state.statuses.join(" ")), width, "…"),
+    );
   }
   return lines;
 }
 
 function autoCompactFromSettings(): boolean {
   try {
-    const settings = JSON.parse(readFileSync(join(homedir(), ".pi/agent/settings.json"), "utf8"));
+    const settings = JSON.parse(
+      readFileSync(join(homedir(), ".pi/agent/settings.json"), "utf8"),
+    );
     return settings.compaction?.enabled !== false;
   } catch {
     return true;
@@ -123,7 +180,8 @@ export default function footerExtension(pi: ExtensionAPI) {
     ctx.ui.setFooter((_tui, theme, footerData) => ({
       render(width: number) {
         const current = live.ctx;
-        if (!current) return [truncateToWidth(theme.fg("dim", "pi"), width, "…")];
+        if (!current)
+          return [truncateToWidth(theme.fg("dim", "pi"), width, "…")];
         const state: FooterState = {
           modelId: current.model?.id ?? "no-model",
           reasoning: current.model?.reasoning ?? false,

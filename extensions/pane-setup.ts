@@ -13,7 +13,8 @@ export default function paneSetupExtension(_pi: ExtensionAPI) {
     for (const file of readdirSync(source)) {
       if (!file.endsWith(".json")) continue;
       const destination = join(target, file);
-      if (!existsSync(destination)) copyFileSync(join(source, file), destination);
+      if (!existsSync(destination))
+        copyFileSync(join(source, file), destination);
     }
   } catch {
     /* pi runs fine without the themes; never block loading over them */

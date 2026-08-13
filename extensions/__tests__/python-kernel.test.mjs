@@ -4,7 +4,11 @@ import { renameSync } from "node:fs";
 import { join } from "node:path";
 import { loadExtensionTool, textOf, EXT_DIR } from "./_test-helpers.mjs";
 
-const { tool, handlers, exports: ext } = await loadExtensionTool(join(EXT_DIR, "python-kernel.ts"));
+const {
+  tool,
+  handlers,
+  exports: ext,
+} = await loadExtensionTool(join(EXT_DIR, "python-kernel.ts"));
 const { KERNEL_HOST } = ext;
 
 function run(params) {
@@ -96,7 +100,11 @@ test("a sibling call is not collateral damage when another cell times out", asyn
   ]);
   assert.equal(hung.isError, true);
   assert.match(textOf(hung), /timed out/);
-  assert.equal(sibling.isError, false, "sibling must not inherit the timeout's restart");
+  assert.equal(
+    sibling.isError,
+    false,
+    "sibling must not inherit the timeout's restart",
+  );
   assert.match(textOf(sibling), /Out\[.*\]: 2/);
 });
 
@@ -106,7 +114,11 @@ test("a queued call's timeout does not count time spent waiting", async () => {
     run({ code: "import time; time.sleep(2.5)", timeoutMs: 8000 }),
     run({ code: "9 * 9", timeoutMs: 1500 }),
   ]);
-  assert.equal(queued.isError, false, "queue time must not be charged to the cell's timeout");
+  assert.equal(
+    queued.isError,
+    false,
+    "queue time must not be charged to the cell's timeout",
+  );
   assert.match(textOf(queued), /Out\[.*\]: 81/);
 });
 
@@ -118,7 +130,10 @@ test("an unwritable kernel fails fast instead of waiting out the timeout", async
   const r = await kernel.send({ code: "2" }, 30_000);
   const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
   assert.equal(r.ok, false);
-  assert.ok(elapsedMs < 5000, `should fail fast, took ${Math.round(elapsedMs)}ms`);
+  assert.ok(
+    elapsedMs < 5000,
+    `should fail fast, took ${Math.round(elapsedMs)}ms`,
+  );
   kernel.shutdown();
 });
 

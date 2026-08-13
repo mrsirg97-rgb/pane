@@ -3,9 +3,12 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { loadExtensionTool, EXT_DIR } from "./_test-helpers.mjs";
 
-const { handlers } = await loadExtensionTool(join(EXT_DIR, "tool-retry-guard.ts"), {
-  requireTool: false,
-});
+const { handlers } = await loadExtensionTool(
+  join(EXT_DIR, "tool-retry-guard.ts"),
+  {
+    requireTool: false,
+  },
+);
 
 function failureEvent(over = {}) {
   return {
@@ -55,7 +58,10 @@ test("the limit failure appends a stop signal to the real error", () => {
   const patch = armBreaker();
   assert.ok(patch, "third consecutive failure must patch the result");
   // the original error survives verbatim as the first block
-  assert.deepEqual(patch.content[0], { type: "text", text: "todo: no task 't9'" });
+  assert.deepEqual(patch.content[0], {
+    type: "text",
+    text: "todo: no task 't9'",
+  });
   assert.equal(patch.content.length, 2);
   assert.match(note(patch), /failed 3× in a row/);
   assert.match(note(patch), /stop calling this tool/);

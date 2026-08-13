@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "description": "A clear pane for pi. Flat chrome, status glyphs, honest state.",
   "private": true,
+  "scripts": {
+    "test": "node --test extensions/__tests__/*.test.mjs",
+    "format": "prettier --write \"extensions/**/*.{ts,mjs}\" \"*.md\" \"*.json\" \"themes/*.json\""
+  },
   "pi": {
     "extensions": [
       "extensions/pane-setup.ts",
@@ -19,5 +23,8 @@
   },
   "dependencies": {
     "undici": "^7.0.0"
+  },
+  "devDependencies": {
+    "prettier": "^3.9.6"
   }
 }

@@ -4,7 +4,12 @@ import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { keyHint } from "@earendil-works/pi-coding-agent";
 
 const GLYPH = { pending: "○", running: "◐", ok: "●", fail: "✕" };
-const COLOR = { pending: "dim", running: "accent", ok: "success", fail: "error" };
+const COLOR = {
+  pending: "dim",
+  running: "accent",
+  ok: "success",
+  fail: "error",
+};
 
 export function status(ctx) {
   if (!ctx.executionStarted) return "pending";
@@ -47,8 +52,14 @@ export function errorText(theme, result) {
 
 /** Collapsed width-aware preview. keep: "head" shows the first lines (hint after),
  *  "tail" the last ones (hint before, matching the built-in bash renderer). */
-export function preview(theme, ctx, styledText, { lines = 6, keep = "head" } = {}) {
-  if (!styledText.trim()) return new Text(indent(theme.fg("dim", "(no output)")), 0, 0);
+export function preview(
+  theme,
+  ctx,
+  styledText,
+  { lines = 6, keep = "head" } = {},
+) {
+  if (!styledText.trim())
+    return new Text(indent(theme.fg("dim", "(no output)")), 0, 0);
   if (ctx.expanded) return new Text(indent(styledText), 0, 0);
   const cache = {};
   return {
@@ -89,5 +100,8 @@ export function stack(...components) {
 
 export function progressBar(theme, done, total, segments = 8) {
   const filled = total ? Math.round((done / total) * segments) : 0;
-  return theme.fg("accent", "▰".repeat(filled)) + theme.fg("dim", "▱".repeat(segments - filled));
+  return (
+    theme.fg("accent", "▰".repeat(filled)) +
+    theme.fg("dim", "▱".repeat(segments - filled))
+  );
 }

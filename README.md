@@ -36,7 +36,7 @@ one visual language, both directions. status glyphs `○ ◐ ● ✕` everywhere
 
 `AGENTS.md` — the working contract these were built for. take it as a template.
 
-100+ tests, colocated: `cd extensions && node --test *.test.mjs`.
+100+ tests: `npm test` (runs `node --test __tests__/*.test.mjs`).
 
 ## install
 

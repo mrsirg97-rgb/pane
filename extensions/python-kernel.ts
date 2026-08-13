@@ -1,4 +1,8 @@
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import {
+  execFile,
+  spawn,
+  type ChildProcessWithoutNullStreams,
+} from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -25,7 +29,11 @@ function runStep(command: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile(command, args, { timeout: 300_000 }, (err, _stdout, stderr) =>
       err
-        ? reject(new Error(`${command} ${args[0] ?? ""}: ${String(stderr || err.message).slice(-500)}`))
+        ? reject(
+            new Error(
+              `${command} ${args[0] ?? ""}: ${String(stderr || err.message).slice(-500)}`,
+            ),
+          )
         : resolve(),
     );
   });
@@ -36,10 +44,18 @@ export function ensureKernel(): Promise<void> {
   if (existsSync(KERNEL_PYTHON)) return Promise.resolve();
   bootstrap ??= (async () => {
     await runStep("python3", ["-m", "venv", VENV_DIR]);
-    await runStep(join(VENV_DIR, "bin/pip"), ["install", "--quiet", "ipython", "numpy", "pandas"]);
+    await runStep(join(VENV_DIR, "bin/pip"), [
+      "install",
+      "--quiet",
+      "ipython",
+      "numpy",
+      "pandas",
+    ]);
   })().catch((err) => {
     bootstrap = null;
-    throw new Error(`kernel bootstrap failed (needs python3 + network): ${err.message}`);
+    throw new Error(
+      `kernel bootstrap failed (needs python3 + network): ${err.message}`,
+    );
   });
   return bootstrap;
 }
@@ -71,7 +87,9 @@ export class Kernel {
   }
 
   private start() {
-    const proc = spawn(KERNEL_PYTHON, [KERNEL_HOST], { stdio: ["pipe", "pipe", "pipe"] });
+    const proc = spawn(KERNEL_PYTHON, [KERNEL_HOST], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     proc.stdout.setEncoding("utf8");
     proc.stderr.setEncoding("utf8");
     proc.stdout.on("data", (chunk: string) => {
@@ -103,7 +121,9 @@ export class Kernel {
     proc.on("exit", (code) => {
       if (!isCurrent()) return;
       const tail = this.stderrTail.trim();
-      this.failAll(`kernel exited (code ${code})` + (tail ? `\n[stderr]\n${tail}` : ""));
+      this.failAll(
+        `kernel exited (code ${code})` + (tail ? `\n[stderr]\n${tail}` : ""),
+      );
       this.proc = null;
     });
     proc.stdin.on("error", () => {});
@@ -131,7 +151,10 @@ export class Kernel {
    *  costs nothing and buys two things: a timeout can only ever kill its own cell (it used
    *  to restart the kernel under a sibling call and report its variables gone), and a
    *  timer starts when the cell is actually written, not while it waits behind another. */
-  async send(payload: Record<string, unknown>, timeoutMs: number): Promise<Reply> {
+  async send(
+    payload: Record<string, unknown>,
+    timeoutMs: number,
+  ): Promise<Reply> {
     const turn = this.queue;
     let release!: () => void;
     this.queue = new Promise<void>((r) => (release = r));
@@ -143,12 +166,19 @@ export class Kernel {
     }
   }
 
-  private async dispatch(payload: Record<string, unknown>, timeoutMs: number): Promise<Reply> {
+  private async dispatch(
+    payload: Record<string, unknown>,
+    timeoutMs: number,
+  ): Promise<Reply> {
     if (!this.proc) {
       try {
         await ensureKernel();
       } catch (err) {
-        return { id: null, ok: false, error: err instanceof Error ? err.message : String(err) };
+        return {
+          id: null,
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        };
       }
       this.start();
     }
@@ -203,41 +233,61 @@ export default function pythonKernelExtension(pi: ExtensionAPI) {
       "persist across calls, so build state up incrementally. numpy and pandas are " +
       "available; IPython magics (%timeit, %run) work. action='vars' lists the current " +
       "namespace, action='reset' clears it.",
-    promptSnippet: "Run Python in a persistent session; state persists across calls",
+    promptSnippet:
+      "Run Python in a persistent session; state persists across calls",
     promptGuidelines: [
       "arithmetic, data shaping, parsing, bulk text -> compute in python, don't estimate.",
       "state persists; compute once, query it in later calls.",
     ],
     parameters: Type.Object({
-      code: Type.Optional(Type.String({ description: "Python source to execute" })),
+      code: Type.Optional(
+        Type.String({ description: "Python source to execute" }),
+      ),
       action: Type.Optional(
         Type.Union([Type.Literal("vars"), Type.Literal("reset")], {
-          description: "'vars' summarises the namespace, 'reset' clears it. Omit to run code.",
+          description:
+            "'vars' summarises the namespace, 'reset' clears it. Omit to run code.",
         }),
       ),
       timeoutMs: Type.Optional(
-        Type.Integer({ description: "Timeout in ms (default 120000)", minimum: 1000 }),
+        Type.Integer({
+          description: "Timeout in ms (default 120000)",
+          minimum: 1000,
+        }),
       ),
     }),
     renderShell: "self",
     renderCall(args: any, theme, ctx) {
-      const codeLines = (args?.code ?? "").split("\n").filter((l: string) => l.trim());
+      const codeLines = (args?.code ?? "")
+        .split("\n")
+        .filter((l: string) => l.trim());
       const detail = args?.action
         ? theme.fg("text", args.action)
         : codeLines.length
-          ? theme.fg("muted", `${codeLines.length} ${codeLines.length === 1 ? "line" : "lines"}`)
+          ? theme.fg(
+              "muted",
+              `${codeLines.length} ${codeLines.length === 1 ? "line" : "lines"}`,
+            )
           : undefined;
       const head = header(theme, ctx, "python", detail);
       if (!codeLines.length) return head;
-      const code = codeLines.map((l: string) => theme.fg("mdCode", l)).join("\n");
+      const code = codeLines
+        .map((l: string) => theme.fg("mdCode", l))
+        .join("\n");
       const body = preview(theme, ctx, code, { lines: 4, keep: "head" });
       return {
-        render: (width: number) => [...head.render(width), ...body.render(width)],
+        render: (width: number) => [
+          ...head.render(width),
+          ...body.render(width),
+        ],
         invalidate: () => body.invalidate?.(),
       };
     },
     renderResult(result, _options, theme, ctx) {
-      if (result.isError && !result.content?.some((c: any) => c.type === "text" && c.text.trim())) {
+      if (
+        result.isError &&
+        !result.content?.some((c: any) => c.type === "text" && c.text.trim())
+      ) {
         return errorText(theme, result);
       }
       const raw = (result.content ?? [])
@@ -255,9 +305,14 @@ export default function pythonKernelExtension(pi: ExtensionAPI) {
     },
     async execute(_toolCallId, params: any) {
       const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-      const payload = params.action ? { cmd: params.action } : { code: params.code ?? "" };
+      const payload = params.action
+        ? { cmd: params.action }
+        : { code: params.code ?? "" };
       if (!params.action && !params.code?.trim()) {
-        return { content: [{ type: "text", text: "no code supplied" }], isError: true };
+        return {
+          content: [{ type: "text", text: "no code supplied" }],
+          isError: true,
+        };
       }
       const reply = await kernel.send(payload, timeoutMs);
       const text = render(reply);

@@ -34,7 +34,12 @@ test("status reflects the execution lifecycle", () => {
 test("header renders glyph, name, detail on one line", () => {
   const line = renderedText(kit.header(theme, ctx(), "fetch", "example.com"));
   assert.match(line, /● fetch · example\.com/);
-  assert.equal(renderedText(kit.header(theme, ctx({ isError: true }), "todo")).includes("✕ todo"), true);
+  assert.equal(
+    renderedText(kit.header(theme, ctx({ isError: true }), "todo")).includes(
+      "✕ todo",
+    ),
+    true,
+  );
 });
 
 test("shortUrl strips protocol and middle-ellipsizes", () => {
@@ -46,21 +51,30 @@ test("shortUrl strips protocol and middle-ellipsizes", () => {
 
 test("preview collapses head and tail with a count hint", () => {
   const body = Array.from({ length: 12 }, (_, i) => `line${i + 1}`).join("\n");
-  const head = renderedText(kit.preview(theme, ctx(), body, { lines: 3, keep: "head" }));
+  const head = renderedText(
+    kit.preview(theme, ctx(), body, { lines: 3, keep: "head" }),
+  );
   assert.match(head, /line1[\s\S]*line3/);
   assert.doesNotMatch(head, /line4\b/);
   assert.match(head, /\+9 lines/);
-  const tail = renderedText(kit.preview(theme, ctx(), body, { lines: 3, keep: "tail" }));
+  const tail = renderedText(
+    kit.preview(theme, ctx(), body, { lines: 3, keep: "tail" }),
+  );
   assert.match(tail, /line10[\s\S]*line12/);
   assert.match(tail.split("\n")[0], /\+9 lines/);
 });
 
 test("preview expands fully and handles empty output", () => {
   const body = Array.from({ length: 12 }, (_, i) => `line${i + 1}`).join("\n");
-  const expanded = renderedText(kit.preview(theme, ctx({ expanded: true }), body, { lines: 3 }));
+  const expanded = renderedText(
+    kit.preview(theme, ctx({ expanded: true }), body, { lines: 3 }),
+  );
   assert.match(expanded, /line12/);
   assert.doesNotMatch(expanded, /\+9 lines/);
-  assert.match(renderedText(kit.preview(theme, ctx(), "  \n ", {})), /no output/);
+  assert.match(
+    renderedText(kit.preview(theme, ctx(), "  \n ", {})),
+    /no output/,
+  );
 });
 
 test("progressBar scales to segments", () => {
@@ -82,19 +96,29 @@ for (const width of [60, 34]) {
             action: "start",
             tasks: [
               { id: "t1", text: "guard the fetch boundary", status: "done" },
-              { id: "t2", text: "wire the DI seam through the tests", status: "in_progress" },
+              {
+                id: "t2",
+                text: "wire the DI seam through the tests",
+                status: "in_progress",
+              },
               { id: "t3", text: "write the failing tests", status: "pending" },
               { id: "t4", text: "flaky e2e", status: "failed" },
             ],
           },
         },
         expectCall: /todo · start t2/,
-        expectResult: /▰[▰▱]+ 1\/4 · next t3[\s\S]*● t1[\s\S]*◐ t2[\s\S]*○ t3[\s\S]*✕ t4/,
+        expectResult:
+          /▰[▰▱]+ 1\/4 · next t3[\s\S]*● t1[\s\S]*◐ t2[\s\S]*○ t3[\s\S]*✕ t4/,
       },
       {
         file: "python-kernel.ts",
-        args: { code: "import pandas as pd\ndf = pd.DataFrame()\nprint(len(df))" },
-        result: { content: [{ type: "text", text: "0\n[stderr]\nwarning: x" }], details: {} },
+        args: {
+          code: "import pandas as pd\ndf = pd.DataFrame()\nprint(len(df))",
+        },
+        result: {
+          content: [{ type: "text", text: "0\n[stderr]\nwarning: x" }],
+          details: {},
+        },
         expectCall: /python · 3 lines[\s\S]*import pandas/,
         expectResult: /0[\s\S]*\[stderr\][\s\S]*warning: x/,
       },
@@ -105,32 +129,61 @@ for (const width of [60, 34]) {
           content: [{ type: "text", text: "[]" }],
           details: {
             results: [
-              { title: "memchr - crates.io", url: "https://crates.io/crates/memchr", snippet: "" },
-              { title: "SIMD string search", url: "https://burntsushi.net/simd", snippet: "" },
+              {
+                title: "memchr - crates.io",
+                url: "https://crates.io/crates/memchr",
+                snippet: "",
+              },
+              {
+                title: "SIMD string search",
+                url: "https://burntsushi.net/simd",
+                snippet: "",
+              },
             ],
           },
         },
         expectCall: /search · rust simd memchr/,
-        expectResult: /1 memchr - crates\.io[\s\S]*crates\.io\/crates\/memchr[\s\S]*2 SIMD/,
+        expectResult:
+          /1 memchr - crates\.io[\s\S]*crates\.io\/crates\/memchr[\s\S]*2 SIMD/,
       },
       {
         file: "web-fetch.ts",
         args: { url: "https://en.wikipedia.org/wiki/Forward_chaining" },
         result: {
-          content: [{ type: "text", text: "Forward chaining is one of the two main methods.\nMore text." }],
-          details: { finalUrl: "https://en.wikipedia.org/wiki/Forward_chaining", status: 200, contentType: "text/html; charset=UTF-8", chars: 3209, truncated: true },
+          content: [
+            {
+              type: "text",
+              text: "Forward chaining is one of the two main methods.\nMore text.",
+            },
+          ],
+          details: {
+            finalUrl: "https://en.wikipedia.org/wiki/Forward_chaining",
+            status: 200,
+            contentType: "text/html; charset=UTF-8",
+            chars: 3209,
+            truncated: true,
+          },
         },
         expectCall: /fetch ·[\s\S]*en\.wikipedia\.org\/wiki\/Forward_chai/,
-        expectResult: /200 · text\/html · 3\.1k chars ·[\s\S]*truncated[\s\S]*Forward chaining/,
+        expectResult:
+          /200 · text\/html · 3\.1k chars ·[\s\S]*truncated[\s\S]*Forward chaining/,
       },
     ];
     for (const c of cases) {
       const { tool } = await loadExtensionTool(join(EXT_DIR, c.file));
       assert.equal(tool.renderShell, "self", `${c.file} renders its own shell`);
-      const callText = renderedText(tool.renderCall(c.args, theme, ctx()), width);
+      const callText = renderedText(
+        tool.renderCall(c.args, theme, ctx()),
+        width,
+      );
       assert.match(callText, c.expectCall, `${c.file} call render`);
       const resultText = renderedText(
-        tool.renderResult(c.result, { expanded: false, isPartial: false }, theme, ctx()),
+        tool.renderResult(
+          c.result,
+          { expanded: false, isPartial: false },
+          theme,
+          ctx(),
+        ),
         width,
       );
       assert.match(resultText, c.expectResult, `${c.file} result render`);
@@ -139,7 +192,11 @@ for (const width of [60, 34]) {
       }
       const errorRender = renderedText(
         tool.renderResult(
-          { content: [{ type: "text", text: "boom" }], isError: true, details: {} },
+          {
+            content: [{ type: "text", text: "boom" }],
+            isError: true,
+            details: {},
+          },
           { expanded: false, isPartial: false },
           theme,
           ctx({ isError: true }),
@@ -152,9 +209,18 @@ for (const width of [60, 34]) {
 }
 
 test("renderers tolerate streaming/incomplete args", async () => {
-  for (const file of ["todo.ts", "python-kernel.ts", "web-search.ts", "web-fetch.ts"]) {
+  for (const file of [
+    "todo.ts",
+    "python-kernel.ts",
+    "web-search.ts",
+    "web-fetch.ts",
+  ]) {
     const { tool } = await loadExtensionTool(join(EXT_DIR, file));
-    const partial = ctx({ executionStarted: false, argsComplete: false, isPartial: true });
+    const partial = ctx({
+      executionStarted: false,
+      argsComplete: false,
+      isPartial: true,
+    });
     const line = renderedText(tool.renderCall(undefined, theme, partial));
     assert.match(line, /○ /, `${file} pending glyph with no args`);
   }
