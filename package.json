@@ -15,6 +15,7 @@
       "extensions/input.ts",
       "extensions/scroll-speed.ts",
       "extensions/todo.ts",
+      "extensions/rem.ts",
       "extensions/python-kernel.ts",
       "extensions/web-search.ts",
       "extensions/web-fetch.ts",
