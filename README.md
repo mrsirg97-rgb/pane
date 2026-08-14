@@ -2,16 +2,16 @@
 
 **pane** — a clear pane for [pi](https://github.com/earendil-works/pi). Flat chrome, status glyphs, honest state. For you and your agent: same glass, both sides.
 
-No fork. Ten extensions on stock pi's public hooks; delete any file, get vanilla back.
+No fork. Eleven extensions on stock pi's public hooks; delete any file, get vanilla back.
 
 ```
 ● bash · $ node --test +1 lines
-  97 passing
+  171 passing
   0.4s
 
+↑2.1k ↓15k · cache R50k W3.0k 92%
 ❯ your turn_
 deepseek · max · 57k/393k 15% (auto)      main
-↑2.1k ↓15k · ⛁ R50k 92%
 ```
 
 ## what's inside
@@ -20,15 +20,15 @@ one visual language, both directions. status glyphs `○ ◐ ● ✕` everywhere
 
 **your side of the glass**
 
-- `builtin-restyle` — bash/read/write/grep/find/ls re-rendered flat: `● tool · detail` headers, head/tail previews with expand hints, durations. execution stays byte-identical stock (renderers swapped, nothing else).
-- `footer` — two rows replacing stock: model · thinking · context (colored past 70/90%), then throughput and cache. pwd dropped; built for phone width.
+- `builtin-restyle` — bash/read/write/edit/grep/find/ls re-rendered flat: `● tool · detail` headers, head/tail previews with expand hints, durations. write previews the written content, edit its diff. execution stays byte-identical stock (renderers swapped, nothing else).
+- `footer` — throughput + cache on a row above the input; model · thinking · context (colored past 70/90%) below. pwd dropped; built for phone width.
 - `input` — muted bars, prompt glyph carries state: accent `❯` your turn, dim `◐` agent streaming (typing = queue/steer).
 - `scroll-speed` — fullscreen TUI wheel 3x (`PI_WHEEL_LINES` tunes). touch-scroll on mobile stops crawling.
 - `themes/` — subtle-dark, subtle-light.
 
 **the agent's side**
 
-- `todo` — a concurrent job queue wearing a todo UI. enforced FSM (pending -> in_progress -> done | failed; failed -> retry), minted ids, several tasks in flight, batched transitions serialized against fresh state. illegal transitions return errors that teach the protocol.
+- `todo` — a concurrent job queue wearing a todo UI. enforced FSM (pending -> in_progress -> done | failed; failed -> retry), minted ids, several tasks in flight, batched transitions serialized against fresh state. illegal transitions return errors that teach the protocol. sqlite event log under the hood: idempotent create, replayable history, corruption fails closed.
 - `rem` — a memory tool: learn commits facts and constraints (idempotent, scoped global or per-project), recall is fuzzy/semantic search over past solutions with project-first global-fill, reflect stores distilled logs (and auto-parks compaction summaries), prune consolidates strength decay or removes/reduces. sqlite-backed, corruption quarantined aside, never deleted.
 - `python` — persistent IPython kernel; state survives across calls; timeouts kill only their own cell.
 - `web-search` + `web-fetch` — SearXNG search, guarded fetch: DNS refusal of private space with readable errors, redirects re-checked, byte/char caps with loud truncation markers, trafilatura extraction. optional egress proxy for connect-time enforcement.
@@ -37,7 +37,7 @@ one visual language, both directions. status glyphs `○ ◐ ● ✕` everywhere
 
 `AGENTS.md` — the working contract these were built for. take it as a template.
 
-100+ tests: `npm test` (runs `node --test __tests__/*.test.mjs`).
+170+ tests: `npm test` (runs `node --test __tests__/*.test.mjs`).
 
 ## install
 
@@ -58,7 +58,7 @@ or copy `extensions/` into `~/.pi/agent/extensions/` and `themes/` into `~/.pi/a
 ## caveats
 
 - `builtin-restyle` and `scroll-speed` touch pi 0.84.1 exported internals. a pi update may wobble them; failure mode is stock look or a loud load error, never silent breakage. delete the file, restyle gone.
-- cross-process todo writes (two pi sessions, same cwd) are last-writer-wins; atomic renames prevent corruption, not lost updates.
+- cross-process todo writes (two pi sessions, same cwd) are last-writer-wins; WAL prevents corruption, and the event log makes races detectable, not lost silently.
 
 ## philosophy
 
