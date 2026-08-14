@@ -72,3 +72,19 @@ test("ensureKernel is a no-op when the venv already exists", async () => {
   await ext.ensureKernel();
   assert.ok(Date.now() - started < 100, "no bootstrap work when venv present");
 });
+
+test("contract is seeded into a fresh agent dir", async () => {
+  const home = mkdtempSync(join(tmpdir(), "pane-setup-"));
+  await runSetupWithHome(home);
+  const seeded = join(home, ".pi/agent/AGENTS.md");
+  assert.equal(existsSync(seeded), true);
+  assert.match(readFileSync(seeded, "utf8"), /agent contract/);
+});
+
+test("an existing contract is never overwritten", async () => {
+  const home = mkdtempSync(join(tmpdir(), "pane-setup-"));
+  mkdirSync(join(home, ".pi/agent"), { recursive: true });
+  writeFileSync(join(home, ".pi/agent/AGENTS.md"), "# my own contract");
+  await runSetupWithHome(home);
+  assert.equal(readFileSync(join(home, ".pi/agent/AGENTS.md"), "utf8"), "# my own contract");
+});

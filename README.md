@@ -35,7 +35,7 @@ one visual language, both directions. status glyphs `○ ◐ ● ✕` everywhere
 - `tool-retry-guard` — 3 consecutive failures of one tool -> a note telling the model to stop retrying blindly.
 - terse promptGuidelines throughout: the model's dashboard is prose-free, like yours.
 
-`AGENTS.template.md` — the working contract these were built for. symlink it to `~/.pi/agent/AGENTS.md` to make it your live global contract (the template name keeps it out of pi's in-repo context discovery, so it never double-loads).
+`AGENTS.template.md` — the working contract these were built for. pane-setup seeds it to `~/.pi/agent/AGENTS.md` on first launch (never overwriting yours; delete the copy to re-seed). the template name keeps the repo copy out of pi's in-repo context discovery, so it never double-loads.
 
 170+ tests: `npm test` (runs `node --test __tests__/*.test.mjs`).
 
