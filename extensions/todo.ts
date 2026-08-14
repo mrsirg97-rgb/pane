@@ -36,6 +36,7 @@ const ACTION = StringEnum([
   "complete",
   "fail",
   "retry",
+  "move",
   "read",
 ] as const);
 const MARK: Record<Status, string> = {
@@ -53,7 +54,7 @@ CREATE TABLE IF NOT EXISTS meta (
 CREATE TABLE IF NOT EXISTS events (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-  op TEXT NOT NULL CHECK (op IN ('create', 'start', 'complete', 'fail', 'retry')),
+  op TEXT NOT NULL CHECK (op IN ('create', 'start', 'complete', 'fail', 'retry', 'move')),
   args TEXT NOT NULL,
   session TEXT
 );
@@ -112,7 +113,7 @@ function replay(db: DatabaseSync): Map<string, StoredTask> {
   return map;
 }
 
-type Op = "create" | "start" | "complete" | "fail" | "retry";
+type Op = "create" | "start" | "complete" | "fail" | "retry" | "move";
 
 type PlannedRow = {
   text: string;
@@ -276,7 +277,36 @@ function applyEvent(
   } else if (op === "retry" && t.status === "failed") {
     t.status = "pending";
     t.updated_seq = seq;
+  } else if (op === "move") {
+    applyMove(map, seq, args);
   }
+}
+
+/** Apply a move event: repositions the task at the 1-based rank given in the
+ *  event, renumbering everyone else densely around it. Deterministic: a pure
+ *  function of the pre-state, so replay reproduces the exact queue order.
+ *  Out-of-range or malformed positions are skipped (replay tolerance). */
+function applyMove(
+  map: Map<string, StoredTask>,
+  seq: number,
+  args: { id?: unknown; pos?: unknown },
+) {
+  const id = typeof args.id === "string" ? args.id : "";
+  const t = map.get(id);
+  if (!t) return;
+  const pos = typeof args.pos === "number" ? args.pos : NaN;
+  if (!Number.isInteger(pos) || pos < 1 || pos > map.size) return;
+  const ordered = [...map.values()].sort(
+    (a, b) => a.pos - b.pos || a.created_seq - b.created_seq,
+  );
+  const idx = ordered.findIndex((x) => x.id === id);
+  if (idx === -1 || idx === pos - 1) return; // already there: no-op
+  ordered.splice(idx, 1);
+  ordered.splice(pos - 1, 0, t);
+  ordered.forEach((x, i) => {
+    x.pos = i;
+  });
+  t.updated_seq = seq;
 }
 
 /** Persist the projection (DELETE + INSERT all rows). Caller owns the transaction. */
@@ -407,6 +437,8 @@ export default function todoExtension(pi: ExtensionAPI) {
       "create may link tasks into a tree: tasks[].dependsOn (task id or exact text; null clears a link); " +
       "a task is blocked until its dependency is done; cycles are refused; next skips blocked tasks. " +
       "several tasks may be in flight; batched transitions apply in order, each against fresh state. " +
+      "move reorders the queue: action='move' id + pos (1-based queue position); positions are " +
+      "minted as events, never updated in place. " +
       "every mutation returns the full queue. ids are minted by the tool; copy, never invent.",
     promptSnippet: "Track and update a task queue for multi-step work",
     promptGuidelines: [
@@ -442,6 +474,12 @@ export default function todoExtension(pi: ExtensionAPI) {
         Type.String({
           description:
             "Task id as shown by the tool. Required for start/complete/fail/retry.",
+        }),
+      ),
+      pos: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          description: "Queue position (1-based, first = 1) for action='move'.",
         }),
       ),
     }),
@@ -531,6 +569,26 @@ export default function todoExtension(pi: ExtensionAPI) {
 
             const id = params.id ?? fail(`action '${action}' requires id`);
             const t = find(map, id) ?? fail(`no task '${id}'`);
+            if (action === "move") {
+              const pos = params.pos ?? fail("action 'move' requires pos");
+              if (!Number.isInteger(pos) || pos < 1 || pos > map.size) {
+                fail(
+                  `move position for '${id}' must be between 1 and ${map.size}, got ${pos}`,
+                );
+              }
+              const append = db
+                .prepare(
+                  "INSERT INTO events (op, args, session) VALUES ('move', ?, NULL)",
+                )
+                .run(JSON.stringify({ id, pos }));
+              applyEvent(map, Number(append.lastInsertRowid), "move", {
+                id,
+                pos,
+              });
+              persist(db, map);
+              return reply(`'${id}' moved to position ${pos}`);
+            }
+
             if (action === "start") {
               if (t.status === "in_progress")
                 fail(`'${id}' is already in progress`);

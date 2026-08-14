@@ -966,3 +966,231 @@ test("create event args carry dependsOn as given", async () => {
   assert.equal(tasks[0].dependsOn, "other"); // raw input, not a resolved id
   assert.equal("dependsOn" in tasks[1], false); // omitted for the plain task
 });
+
+// ---- move: schema ----
+test("move schema: id and pos required; pos must be a positive integer", () => {
+  assert.equal(checkSchema({ action: "move", id: "t1", pos: 1 }), true);
+  assert.equal(checkSchema({ action: "move", id: "t1" }), true); // pos is runtime-loud
+  assert.equal(checkSchema({ action: "move", pos: 1 }), true); // id is runtime-loud
+  assert.equal(checkSchema({ action: "move", id: "t1", pos: 0 }), false);
+  assert.equal(checkSchema({ action: "move", id: "t1", pos: 1.5 }), false);
+});
+
+// ---- move: reordering ----
+test("move reorders the queue; positions are renumbered deterministically", async () => {
+  const cwd = join(scratch, "ws36");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const created = await tool.execute("t112", {
+    action: "create",
+    tasks: [{ text: "a" }, { text: "b" }, { text: "c" }],
+  });
+  assert.equal(created.isError, undefined);
+  const cId = idOf("c", textOf(created));
+  const r = await tool.execute("t113", {
+    action: "move",
+    id: cId,
+    pos: 1,
+  });
+  assert.equal(r.isError, undefined);
+  const rows = projRows(cwd);
+  assert.deepEqual(
+    rows.map((t) => t.text),
+    ["c", "a", "b"],
+  );
+  assert.deepEqual(
+    rows.map((t) => t.pos),
+    [0, 1, 2], // dense renumbering, no gaps
+  );
+  // next follows the moved order
+  const read = await tool.execute("t114", { action: "read" });
+  assert.match(textOf(read), /next: t3/);
+});
+
+test("move to a middle position inserts before the current occupant", async () => {
+  const cwd = join(scratch, "ws37");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const created = await tool.execute("t115", {
+    action: "create",
+    tasks: [{ text: "a" }, { text: "b" }, { text: "c" }],
+  });
+  const aId = idOf("a", textOf(created));
+  await tool.execute("t116", { action: "move", id: aId, pos: 2 });
+  const rows = projRows(cwd);
+  assert.deepEqual(
+    rows.map((t) => t.text),
+    ["b", "a", "c"],
+  );
+});
+
+test("move to the last position appends at the back", async () => {
+  const cwd = join(scratch, "ws38");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const created = await tool.execute("t117", {
+    action: "create",
+    tasks: [{ text: "a" }, { text: "b" }, { text: "c" }],
+  });
+  const aId = idOf("a", textOf(created));
+  await tool.execute("t118", { action: "move", id: aId, pos: 3 });
+  const rows = projRows(cwd);
+  assert.deepEqual(
+    rows.map((t) => t.text),
+    ["b", "c", "a"],
+  );
+});
+
+test("move to the current position is a no-op", async () => {
+  const cwd = join(scratch, "ws39");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const created = await tool.execute("t119", {
+    action: "create",
+    tasks: [{ text: "a" }, { text: "b" }],
+  });
+  const bId = idOf("b", textOf(created));
+  const r = await tool.execute("t120", { action: "move", id: bId, pos: 2 });
+  assert.equal(r.isError, undefined);
+  const rows = projRows(cwd);
+  assert.deepEqual(
+    rows.map((t) => t.text),
+    ["a", "b"],
+  );
+});
+
+test("move works on done and failed tasks", async () => {
+  const cwd = join(scratch, "ws40");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const created = await tool.execute("t121", {
+    action: "create",
+    tasks: [{ text: "done one" }, { text: "fail one" }, { text: "keep" }],
+  });
+  const doneId = idOf("done one", textOf(created));
+  const failId = idOf("fail one", textOf(created));
+  await tool.execute("t122", { action: "start", id: doneId });
+  await tool.execute("t123", { action: "complete", id: doneId });
+  await tool.execute("t124", { action: "start", id: failId });
+  await tool.execute("t125", { action: "fail", id: failId });
+  const r = await tool.execute("t126", { action: "move", id: doneId, pos: 3 });
+  assert.equal(r.isError, undefined);
+  const rows = projRows(cwd);
+  assert.deepEqual(
+    rows.map((t) => t.text),
+    ["fail one", "keep", "done one"],
+  );
+  assert.equal(rows.find((t) => t.text === "done one").status, "done");
+});
+
+// ---- move: validation ----
+test("move out-of-range position refuses loudly", async () => {
+  const cwd = join(scratch, "ws41");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const created = await tool.execute("t127", {
+    action: "create",
+    tasks: [{ text: "a" }, { text: "b" }],
+  });
+  const aId = idOf("a", textOf(created));
+  await assert.rejects(
+    () => tool.execute("t128", { action: "move", id: aId, pos: 0 }),
+    /between 1 and 2/,
+  );
+  await assert.rejects(
+    () => tool.execute("t129", { action: "move", id: aId, pos: 3 }),
+    /between 1 and 2/,
+  );
+  // nothing landed
+  const rows = projRows(cwd);
+  assert.deepEqual(
+    rows.map((t) => t.text),
+    ["a", "b"],
+  );
+});
+
+test("move unknown id refuses loudly", async () => {
+  const cwd = join(scratch, "ws42");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await tool.execute("t130", { action: "create", tasks: [{ text: "a" }] });
+  await assert.rejects(
+    () => tool.execute("t131", { action: "move", id: "t99", pos: 1 }),
+    /no task 't99'/,
+  );
+  await assert.rejects(
+    () => tool.execute("t131b", { action: "move", pos: 1 }),
+    /requires id/,
+  );
+});
+
+// ---- move: event log ----
+test("move appends one move event with args as given", async () => {
+  const cwd = join(scratch, "ws43");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const created = await tool.execute("t132", {
+    action: "create",
+    tasks: [{ text: "a" }, { text: "b" }],
+  });
+  const aId = idOf("a", textOf(created));
+  const before = eventRows(cwd).length;
+  await tool.execute("t133", { action: "move", id: aId, pos: 2 });
+  const rows = eventRows(cwd);
+  assert.equal(rows.length, before + 1);
+  const move = rows.at(-1);
+  assert.equal(move.op, "move");
+  assert.deepEqual(JSON.parse(move.args), { id: aId, pos: 2 }); // as given, 1-based
+});
+
+// ---- move: replay integrity ----
+test("moved order survives projection tamper (rebuilt from events)", async () => {
+  const cwd = join(scratch, "ws44");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const created = await tool.execute("t134", {
+    action: "create",
+    tasks: [{ text: "a" }, { text: "b" }, { text: "c" }],
+  });
+  const cId = idOf("c", textOf(created));
+  await tool.execute("t135", { action: "move", id: cId, pos: 1 });
+  // scramble the projection directly; events unchanged
+  const db = openDb(cwd);
+  db.prepare("UPDATE tasks SET pos = 99 - pos").run();
+  db.close();
+  const r = await tool.execute("t136", { action: "read" });
+  const rows = projRows(cwd);
+  assert.deepEqual(
+    rows.map((t) => t.text),
+    ["c", "a", "b"],
+  );
+});
+
+test("sequential moves compose deterministically", async () => {
+  const cwd = join(scratch, "ws45");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const created = await tool.execute("t137", {
+    action: "create",
+    tasks: [{ text: "a" }, { text: "b" }, { text: "c" }, { text: "d" }],
+  });
+  const aId = idOf("a", textOf(created));
+  const dId = idOf("d", textOf(created));
+  await tool.execute("t138", { action: "move", id: dId, pos: 1 });
+  await tool.execute("t139", { action: "move", id: aId, pos: 4 });
+  const rows = projRows(cwd);
+  assert.deepEqual(
+    rows.map((t) => t.text),
+    ["d", "b", "c", "a"],
+  );
+  // replay from the log alone reproduces the same order
+  const db = openDb(cwd);
+  db.exec("DELETE FROM tasks");
+  db.close();
+  const r = await tool.execute("t140", { action: "read" });
+  const after = projRows(cwd);
+  assert.deepEqual(
+    after.map((t) => t.text),
+    ["d", "b", "c", "a"],
+  );
+});
