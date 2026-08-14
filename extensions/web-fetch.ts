@@ -133,7 +133,7 @@ async function defaultFetch(): Promise<typeof fetch> {
     const { fetch: undiciFetch, ProxyAgent } = await import("undici");
     const dispatcher = new ProxyAgent(PROXY_URL);
     proxiedFetch = ((input: any, init: any) =>
-      undiciFetch(input, { ...init, dispatcher })) as typeof fetch;
+      undiciFetch(input, { ...init, dispatcher })) as unknown as typeof fetch;
   }
   return proxiedFetch;
 }
@@ -253,7 +253,6 @@ export function htmlToText(html: string): string {
     .trim();
 }
 
-// HTML goes to trafilatura over stdin, never via -u: letting it fetch would bypass the guard.
 function runTrafilatura(binary: string, html: string): Promise<string> {
   return new Promise((resolve) => {
     const proc = execFile(

@@ -93,7 +93,6 @@ test("parallel calls are routed by id, not corrupted", async () => {
 
 test("a sibling call is not collateral damage when another cell times out", async () => {
   await run({ code: "keep = 7" });
-  // the hung cell restarts the kernel; the sibling must still get its own honest answer
   const [hung, sibling] = await Promise.all([
     run({ code: "import time; time.sleep(30)", timeoutMs: 1500 }),
     run({ code: "1 + 1" }),
@@ -109,7 +108,6 @@ test("a sibling call is not collateral damage when another cell times out", asyn
 });
 
 test("a queued call's timeout does not count time spent waiting", async () => {
-  // 2.5s of work ahead of it, but its own 1.5s budget starts when it is written
   const [, queued] = await Promise.all([
     run({ code: "import time; time.sleep(2.5)", timeoutMs: 8000 }),
     run({ code: "9 * 9", timeoutMs: 1500 }),
@@ -124,7 +122,7 @@ test("a queued call's timeout does not count time spent waiting", async () => {
 
 test("an unwritable kernel fails fast instead of waiting out the timeout", async () => {
   const kernel = new ext.Kernel();
-  await kernel.send({ code: "1" }, 5000); // force a spawn so there is a stdin to break
+  await kernel.send({ code: "1" }, 5000);
   kernel.proc.stdin.destroy();
   const started = process.hrtime.bigint();
   const r = await kernel.send({ code: "2" }, 30_000);

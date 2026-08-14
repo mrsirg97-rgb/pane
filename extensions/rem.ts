@@ -13,20 +13,13 @@ const DIR = join(homedir(), ".pi/agent/rem");
 const DB_FILE = "rem.sqlite";
 const SCOPE_GLOBAL = "global";
 
-/** Fuzz arm thresholds. Below 3 shared grams the trigram signal is noise;
- *  containment < 0.5 lets a single common token fake relevance. */
 const FUZZY_MIN_OVERLAP = 3;
 const FUZZY_MIN_CONTAINMENT = 0.5;
-/** RRF k — 60 is the common constant; larger flattens dual-arm advantage. */
 const RECIPROCAL_RANK_K = 60;
-/** Strength blend: fused rank is diluted by strength, never replaced. */
 const RANK_STRENGTH_FLOOR = 0.4;
 const RANK_STRENGTH_GAIN = 0.6;
-/** Exponential decay per day: strength halves over ~35 days of neglect. */
 const DECAY_RATE = 0.02;
-/** Reinforcement per access, scaled by importance. */
 const REINFORCE_RATE = 0.05;
-/** Recall caps: k is a live-hit budget; each arm may fetch 2k for fusion. */
 const RECALL_K_DEFAULT = 10;
 const RECALL_K_MAX = 50;
 const ARM_CAP_FACTOR = 2;
@@ -89,9 +82,6 @@ CREATE INDEX IF NOT EXISTS trigrams_gram_idx ON trigrams (gram);
 CREATE INDEX IF NOT EXISTS trigrams_memory_idx ON trigrams (memory_id);
 `;
 
-/** The semantic arm. Creation is the FTS5 availability probe: the try/catch
- *  around it detects the build capability per connection. A build without
- *  FTS5 degrades to the fuzzy arm, never fatal. */
 const FTS_SCHEMA = `
 CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5 (
   content,
@@ -99,12 +89,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5 (
 );
 `;
 
-/** A store handle: the connection plus the FTS5 capability detected for this
- *  open. Capability is build state, never persisted; per-connection memory
- *  only, so a stale value cannot outlive the open. */
 type Store = { db: DatabaseSync; fts: boolean };
 
-/** Test seam: simulates a build without FTS5. undefined = detect for real. */
 export function __setFtsAvailable(v: boolean | undefined) {
   ftsOverride = v;
 }
@@ -114,9 +100,6 @@ function dbPath(): string {
   return join(DIR, DB_FILE);
 }
 
-/** Probe FTS5 availability on this connection. The CREATE itself is the
- *  probe; a throw means the arm is unavailable and the FTS insert is skipped
- *  for the whole open. */
 function detectFts(db: DatabaseSync): boolean {
   try {
     db.exec(FTS_SCHEMA);
@@ -126,10 +109,6 @@ function detectFts(db: DatabaseSync): boolean {
   }
 }
 
-/** The store opened through the shared sqlite.ts lifecycle with the
- *  quarantine policy: memories are irreplaceable evidence, so a corrupt
- *  store is renamed aside, never deleted. FTS5 capability is detected per
- *  open and rides the handle, never persisted. */
 const STORE_OPTS = {
   path: dbPath(),
   schema: SCHEMA,
@@ -137,9 +116,6 @@ const STORE_OPTS = {
   configure: (db: DatabaseSync) => db.exec("PRAGMA foreign_keys = ON"),
 };
 
-/** One transaction per call: open, BEGIN IMMEDIATE, run, COMMIT. Any throw
- *  rolls back; the connection always checkpoints and closes. The handle
- *  carries the FTS5 capability for this open. */
 function withStore<T>(fn: (store: Store) => T): T {
   return withStoreShared(
     STORE_OPTS,
@@ -154,8 +130,6 @@ export function shortHash(cwd: string): string {
   return createHash("sha1").update(cwd).digest("hex").slice(0, 12);
 }
 
-/** Resolve the storage scope for a write: 'project' keys on cwd, 'global'
- *  is explicit. The label is display-only; the key is internal. */
 function writeScope(scope: string | undefined, cwd: string) {
   if (scope === SCOPE_GLOBAL)
     return { scope: SCOPE_GLOBAL, label: SCOPE_GLOBAL };
@@ -164,8 +138,6 @@ function writeScope(scope: string | undefined, cwd: string) {
   return { scope: shortHash(cwd), label: basename(cwd) || "root" };
 }
 
-/** Read scopes for a recall/prune: project (hybrid: project first, global
- *  fills), global only, or all scopes interleaved. */
 function readScopes(scope: string | undefined, cwd: string): string[] {
   if (scope === SCOPE_GLOBAL) return [SCOPE_GLOBAL];
   const h = shortHash(cwd);
@@ -192,14 +164,11 @@ function clamp(v: number): number {
   return v;
 }
 
-/** Exponential decay for days elapsed. Zero elapsed is the identity. */
 function decay(strength: number, days: number): number {
   if (days <= 0) return strength;
   return strength * Math.exp(-DECAY_RATE * days);
 }
 
-/** Reinforcement for accesses since the last checkpoint, scaled by
- *  importance. Recall defers reinforcement to the consolidate pass. */
 function reinforce(
   strength: number,
   accessCount: number,
@@ -208,9 +177,6 @@ function reinforce(
   return strength + accessCount * REINFORCE_RATE * importance;
 }
 
-/** The whole consolidation formula at a checkpoint: decay by days since the
- *  last checkpoint, reinforce the accesses since then, clamp. Idempotent: a
- *  replay with no elapsed time and no new accesses is a no-op. */
 function consolidate(
   strength: number,
   days: number,
@@ -220,9 +186,6 @@ function consolidate(
   return clamp(reinforce(decay(strength, days), accessCount, importance));
 }
 
-/** Effective strength read at recall: what consolidate would persist now.
- *  Never persisted here; the prune consolidate pass persists the same
- *  computation, so the two paths agree and cannot double-count. */
 function effectiveStrength(
   m: Pick<
     Memory,
@@ -238,8 +201,6 @@ function effectiveStrength(
   );
 }
 
-/** Tokenize into lowercase alphanumeric words. Shared by the trigram arm
- *  and the FTS query builder, so recall reach is symmetric with learn. */
 function tokenize(text: string): string[] {
   return text
     .toLowerCase()
@@ -247,8 +208,6 @@ function tokenize(text: string): string[] {
     .filter(Boolean);
 }
 
-/** Padded trigrams of one word, pg_trgm convention: two-space padding so
- *  short tokens are matchable. */
 function gramsOfWord(word: string): string[] {
   const padded = `  ${word}  `;
   const out: string[] = [];
@@ -256,7 +215,6 @@ function gramsOfWord(word: string): string[] {
   return out;
 }
 
-/** Deduplicated trigram set of a text. One row per gram per memory. */
 function gramsOf(text: string): string[] {
   const set = new Set<string>();
   for (const word of tokenize(text)) {
@@ -272,8 +230,6 @@ function insertGrams(db: DatabaseSync, memoryId: number, grams: string[]) {
   for (const gram of grams) insert.run(memoryId, gram);
 }
 
-/** FTS query from tokens: AND chain with reserved operators quoted so a
- *  memory about "and/or/not" never breaks the query grammar. */
 function ftsQuery(tokens: string[]): string {
   return tokens
     .map((t) => (/^(and|or|not)$/.test(t) ? `"${t}"` : t))
@@ -284,11 +240,6 @@ function fail(message: string): never {
   throw new Error(`rem: ${message}`);
 }
 
-// ---- recall internals ----
-
-/** Semantic arm: FTS5 porter unicode61, AND chain, bm25 rank ascending.
- *  Gated on the per-open capability: an fts-less build never queries a
- *  table it could not create. */
 function semanticArm(
   db: DatabaseSync,
   tokens: string[],
@@ -316,8 +267,6 @@ function semanticArm(
   }));
 }
 
-/** Fuzzy arm: trigram overlap, containment threshold enforced as a minimum
- *  overlap count. Per-word padding makes short tokens reachable. */
 function fuzzyArm(
   db: DatabaseSync,
   grams: string[],
@@ -351,7 +300,6 @@ function fuzzyArm(
   }));
 }
 
-/** Reciprocal-rank fusion: dedup by memory_id, sum per-arm contributions. */
 function fuse(
   arms: { memory_id: number; arm: "fts" | "fuzzy"; rank: number }[][],
 ): Map<number, { score: number; match: "fts" | "fuzzy" | "both" }> {
@@ -384,8 +332,6 @@ function hydrate(db: DatabaseSync, ids: number[]): Map<number, Memory> {
   return new Map(rows.map((r) => [r.id, r]));
 }
 
-/** Ranked recall within explicit scopes. k budgets live hits; superseded
- *  hits fill only the unused remainder when requested. */
 function recallScoped(
   store: Store,
   opts: {
@@ -437,7 +383,6 @@ function recallScoped(
   return top.slice(0, k);
 }
 
-/** Browse: no query, latest memories by recency, effective strength re-ranked. */
 function browse(
   db: DatabaseSync,
   scopes: string[],
@@ -463,8 +408,6 @@ function browse(
     .slice(0, k);
 }
 
-/** Store a memory row + both projections in one transaction. Returns the
- *  row and whether it already existed (natural-key dedup). */
 function storeMemory(
   store: Store,
   input: {
@@ -835,9 +778,6 @@ export default function remExtension(pi: ExtensionAPI) {
     },
   });
 
-  // The harness already compresses the write-ahead log on every compaction;
-  // park the summary as a low-importance reflection. Fire-and-forget: a store
-  // failure must never crash a session.
   pi.on("session_compact", (event: any, ctx: any) => {
     const summary = event?.compactionEntry?.summary;
     if (typeof summary !== "string" || !summary.trim()) return;
@@ -862,9 +802,6 @@ export default function remExtension(pi: ExtensionAPI) {
   });
 }
 
-/** Mark targets as superseded by the given memory; every target must exist
- *  (loud refusal), so a typo never silently corrupts the trust chain. A
- *  target that is the memory itself is a no-op: nothing can supersede it. */
 function applySupersedes(
   db: DatabaseSync,
   byId: number,
@@ -888,11 +825,6 @@ function applySupersedes(
   for (const id of uniq) update.run(byId, id);
 }
 
-/** The persisted consolidation pass: decay + reinforce + zero the access
- *  counter atomically at the checkpoint. Idempotent: a replay with no
- *  elapsed time and no new accesses leaves strength unchanged. Honors an
- *  optional selection (ids or criteria); no selection means the whole
- *  store, so a scoped request never silently does more than asked. */
 function consolidatePass(
   db: DatabaseSync,
   sel: {
@@ -946,7 +878,6 @@ function consolidatePass(
   return rows.length;
 }
 
-/** Shared scope/kind/age criteria clause for selection queries. */
 function filterClause(sel: {
   scope: string | undefined;
   kind: string | undefined;
@@ -969,8 +900,6 @@ function filterClause(sel: {
   return { clauses, args };
 }
 
-/** Resolve prune selection: ids, or criteria (scope/kind/older_than_days).
- *  Nothing at all refuses loudly, so a typo never nukes the project. */
 function selectIds(
   db: DatabaseSync,
   sel: {
@@ -994,16 +923,9 @@ function selectIds(
   return rows.map((r) => r.id);
 }
 
-/** Delete memories with their projections. memory_fts is a virtual table
- *  with no FK: its row is removed explicitly by rowid (pinned at
- *  memories.id), trigrams are deleted explicitly with the cascade as
- *  backstop, all in the caller's transaction. The FTS delete is gated on
- *  the per-open capability: an fts-less build never created the table, so
- *  it must never be touched. Returns the count of memories actually
- *  deleted, so missing ids report zero instead of phantom removals. */
 function removeMemories(store: Store, ids: number[]): number {
   const { db, fts } = store;
-  // node:sqlite prepare validates schema eagerly: on an fts-less build the
+  // node:sqlite prepare validates schema eagerly.
   // FTS statement must not even be prepared, or it throws "no such table".
   const delFts = fts
     ? db.prepare("DELETE FROM memory_fts WHERE rowid = ?")
@@ -1019,7 +941,6 @@ function removeMemories(store: Store, ids: number[]): number {
   return removed;
 }
 
-/** Lower importance on the selected memories. Returns the affected rows. */
 function reduceImportance(
   db: DatabaseSync,
   ids: number[],

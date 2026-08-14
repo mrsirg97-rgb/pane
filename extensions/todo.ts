@@ -11,14 +11,7 @@ import { errorText, header, indent, progressBar } from "./_render-kit.mjs";
 
 const DIR = join(homedir(), ".pi/agent/todos");
 
-/** Staleness threshold in event-count, not wall-clock: a task whose last update is
- *  this many events behind the latest seq is "stale". ~24h of activity. */
 export const STALE_THRESHOLD_SEQ = 200;
-
-/** Event log compaction threshold: a mutation that pushes the log past this
- *  count snapshots the queue into a compact event and deletes the old log,
- *  so replay cost and file growth stay bounded. Staleness epochs reset at
- *  each compaction (the checkpoint date becomes the footer's anchor). */
 export const COMPACT_THRESHOLD_EVENTS = 1000;
 
 type Status = "pending" | "in_progress" | "done" | "failed";
@@ -28,13 +21,11 @@ type Task = {
   status: Status;
   dependsOn: string | null;
 };
-/** Render/reply shape: blockedBy is derived at reply time, never stored. */
 type TaskView = Task & { blockedBy: string | null; owner: string | null };
 type StoredTask = Task & {
   pos: number;
   created_seq: number;
   updated_seq: number;
-  /** Session that started this in_progress task, derived from the log. */
   owner: string | null;
 };
 
@@ -86,14 +77,10 @@ function dbPath(): string {
   return join(DIR, `${key}.sqlite`);
 }
 
-/** The store opened through the shared sqlite.ts lifecycle with the delete
- *  policy: the queue is short-lived, so a corrupt store is recreated empty,
- *  never partially read. Resolved per call: the path hashes the cwd. */
 function storeOpts(): { path: string; schema: string; policy: "delete" } {
   return { path: dbPath(), schema: SCHEMA, policy: "delete" };
 }
 
-/** Replay the event log into a projection map. Total: never throws; bad rows are skipped. */
 function replay(db: DatabaseSync): Map<string, StoredTask> {
   const map = new Map<string, StoredTask>();
   const events = db
@@ -133,8 +120,6 @@ type PlannedRow = {
 };
 type Plan = { rows: PlannedRow[]; problems: string[] };
 
-/** Pure. Dedup by text (first occurrence wins), mint ids/positions, resolve dependsOn
- *  (id first, then exact text) against existing tasks plus the batch itself. Never mutates. */
 function planCreate(
   map: Map<string, StoredTask>,
   incoming: { text?: unknown; dependsOn?: unknown }[],
@@ -189,8 +174,6 @@ function planCreate(
   return { rows, problems };
 }
 
-/** Apply a planned create to the projection. Deterministic; links whose target is
- *  missing are dropped (replay resilience), never fatal. */
 function applyCreate(map: Map<string, StoredTask>, seq: number, plan: Plan) {
   for (const row of plan.rows) {
     if (map.has(row.id)) continue; // existing: link handled in pass 2
@@ -215,7 +198,6 @@ function applyCreate(map: Map<string, StoredTask>, seq: number, plan: Plan) {
   }
 }
 
-/** DFS cycle path over the existing graph plus the planned batch, or null. */
 function cycleProblem(
   map: Map<string, StoredTask>,
   plan: Plan,
@@ -249,14 +231,12 @@ function cycleProblem(
   return null;
 }
 
-/** Refuse the batch on any dependency problem: unknown target, self, or cycle. */
 function validateDeps(map: Map<string, StoredTask>, plan: Plan): void {
   if (plan.problems.length) fail(plan.problems[0]);
   const cycle = cycleProblem(map, plan);
   if (cycle) fail(`dependencies would form a cycle: ${cycle.join(" -> ")}`);
 }
 
-/** Apply one event to the projection. Deterministic; inapplicable transitions are no-ops. */
 function applyEvent(
   map: Map<string, StoredTask>,
   seq: number,
@@ -302,10 +282,6 @@ function applyEvent(
   }
 }
 
-/** Apply a compact snapshot: the log's history is replaced by this single
- *  event, so it must reproduce the full queue. Rows are applied best-effort
- *  (bad rows skipped), the epoch resets (created_seq = updated_seq = seq),
- *  and dangling dependency links are dropped like create does. */
 function applyCompact(
   map: Map<string, StoredTask>,
   seq: number,
@@ -368,9 +344,6 @@ function applyCompact(
   }
 }
 
-/** Snapshot the queue into a compact event and delete the older log: the
- *  projection's seq anchors reset to the snapshot's epoch, so the table
- *  rows always reference surviving events. Caller owns the transaction. */
 function compact(
   db: DatabaseSync,
   map: Map<string, StoredTask>,
@@ -399,10 +372,6 @@ function compact(
   db.prepare("DELETE FROM events WHERE seq < ?").run(seq);
 }
 
-/** Apply a move event: repositions the task at the 1-based rank given in the
- *  event, renumbering everyone else densely around it. Deterministic: a pure
- *  function of the pre-state, so replay reproduces the exact queue order.
- *  Out-of-range or malformed positions are skipped (replay tolerance). */
 function applyMove(
   map: Map<string, StoredTask>,
   seq: number,
@@ -426,7 +395,6 @@ function applyMove(
   t.updated_seq = seq;
 }
 
-/** Persist the projection (DELETE + INSERT all rows). Caller owns the transaction. */
 function persist(db: DatabaseSync, map: Map<string, StoredTask>) {
   db.exec("DELETE FROM tasks");
   const insert = db.prepare(
@@ -448,7 +416,6 @@ function persist(db: DatabaseSync, map: Map<string, StoredTask>) {
   }
 }
 
-/** One-line footer when the workspace has unresolved (stale) history, else null. */
 function staleFooter(db: DatabaseSync): string | null {
   const latest = db.prepare("SELECT MAX(seq) AS m FROM events").get() as {
     m: number | null;
@@ -477,7 +444,6 @@ function find(
   return map.get(id);
 }
 
-/** The dependency id that blocks this pending/in_progress task, or null. */
 function blockedBy(map: Map<string, StoredTask>, t: StoredTask): string | null {
   if (t.status !== "pending" && t.status !== "in_progress") return null;
   const d = t.dependsOn;
@@ -490,7 +456,6 @@ function fail(message: string): never {
   throw new Error(`todo: ${message}`);
 }
 
-/** The session id for attribution and claims, or "anon" when unknown. */
 function currentSession(ctx?: {
   sessionManager?: { getSessionId?: () => string };
 }): string {
@@ -498,7 +463,6 @@ function currentSession(ctx?: {
   return typeof id === "string" && id.length ? id : "anon";
 }
 
-/** Suffix for a task claimed by a foreign session: who owns it, truncated. */
 function claimSuffix(t: TaskView, session: string): string {
   if (t.status !== "in_progress" || !t.owner || t.owner === session) return "";
   return ` · claimed by ${t.owner.slice(0, 8)}`;
@@ -662,9 +626,6 @@ export default function todoExtension(pi: ExtensionAPI) {
             const session = currentSession(ctx);
             const map = replay(db);
 
-            // Bounded log: a mutation that crosses the threshold snapshots the
-            // queue first (pre-mutation state), then the mutation event follows.
-            // Reads never append, so they never trigger compaction.
             if (action !== "read") {
               const count = db
                 .prepare("SELECT COUNT(*) AS c FROM events")

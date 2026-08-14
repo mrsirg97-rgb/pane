@@ -57,7 +57,6 @@ test("the limit failure appends a stop signal to the real error", () => {
   turnStart();
   const patch = armBreaker();
   assert.ok(patch, "third consecutive failure must patch the result");
-  // the original error survives verbatim as the first block
   assert.deepEqual(patch.content[0], {
     type: "text",
     text: "todo: no task 't9'",
@@ -91,7 +90,6 @@ test("turn_start resets all counters", () => {
 test("non-error results never patch and reset the streak", () => {
   turnStart();
   assert.equal(result(successEvent({ toolName: "bash" })), undefined);
-  // failures after a success still need a fresh limit
   assert.equal(result(failureEvent({ toolName: "bash" })), undefined);
   assert.equal(result(failureEvent({ toolName: "bash" })), undefined);
 });

@@ -1,9 +1,3 @@
-// Behavioral tests for todo.ts v2 (sqlite-backed task queue: events spine + projection).
-// Run: node --test todo.test.mjs
-// Exercises the schema (failure modes live there), the strict state machine,
-// per-workspace isolation, event-log invariants, transaction atomicity, idempotent
-// upsert create, stale-task surfacing, and parallel-call serialization against a
-// scratch HOME + cwd, so the real ~/.pi/agent/todos is never touched.
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";

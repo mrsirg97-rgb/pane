@@ -147,10 +147,6 @@ export class Kernel {
     this.teardown("kernel shut down");
   }
 
-  /** One request in flight at a time. The kernel executes serially anyway, so queueing
-   *  costs nothing and buys two things: a timeout can only ever kill its own cell (it used
-   *  to restart the kernel under a sibling call and report its variables gone), and a
-   *  timer starts when the cell is actually written, not while it waits behind another. */
   async send(
     payload: Record<string, unknown>,
     timeoutMs: number,
@@ -187,8 +183,6 @@ export class Kernel {
     try {
       this.proc!.stdin.write(JSON.stringify({ ...payload, id }) + "\n");
     } catch (err) {
-      // The cell never reached the kernel, so no reply is coming. Answer now instead of
-      // leaving the caller to discover it via the full timeout.
       this.pending.delete(id);
       const message = err instanceof Error ? err.message : String(err);
       return { id, ok: false, error: `kernel is not writable: ${message}` };

@@ -2,20 +2,12 @@ import { mkdirSync, renameSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-/**
- * Corruption policy per store. Deliberately divergent:
- * - "delete": todo's queue is short-lived; deleting a corrupt store is honest.
- * - "quarantine": rem's memories are irreplaceable evidence; a corrupt store
- *   is renamed aside (`.corrupt-<ts>`), never deleted.
- * A documented parameter, not drift.
- */
 export type CorruptionPolicy = "delete" | "quarantine";
 
 export type OpenOptions = {
   path: string;
   schema: string;
   policy: CorruptionPolicy;
-  /** Per-connection setup before the schema runs (e.g. foreign_keys). */
   configure?: (db: DatabaseSync) => void;
 };
 
@@ -28,7 +20,6 @@ function rawOpen(o: OpenOptions): DatabaseSync {
   return db;
 }
 
-/** Dispose of a corrupt store per the policy: delete, or quarantine aside. */
 function disposeCorrupt(p: string, policy: CorruptionPolicy) {
   if (policy === "delete") {
     rmSync(p, { force: true });
@@ -46,9 +37,6 @@ function disposeCorrupt(p: string, policy: CorruptionPolicy) {
   }
 }
 
-/** Open the store. Fail closed on corruption: a database that fails to open
- *  or fails integrity check is disposed per the corruption policy and
- *  recreated empty, never partially read. */
 export function openDb(o: OpenOptions): DatabaseSync {
   const dir = dirname(o.path);
   mkdirSync(dir, { recursive: true });
@@ -66,9 +54,6 @@ export function openDb(o: OpenOptions): DatabaseSync {
   return rawOpen(o);
 }
 
-/** One transaction per call: open, BEGIN IMMEDIATE, run, COMMIT. Any throw
- *  rolls back; the connection always checkpoints and closes. The handle
- *  factory rides the open (per-open capability detection lives there). */
 export function withStore<T, H = DatabaseSync>(
   o: OpenOptions,
   handle: (db: DatabaseSync) => H,
@@ -98,8 +83,6 @@ export function withStore<T, H = DatabaseSync>(
   }
 }
 
-/** Serialized access: concurrent calls land in call order against fresh
- *  state. Shared by every sqlite-backed tool in the process. */
 let busy: Promise<void> = Promise.resolve();
 export async function withLog<T>(fn: () => T): Promise<T> {
   const prev = busy;

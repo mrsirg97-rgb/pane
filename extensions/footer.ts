@@ -123,7 +123,6 @@ export function buildFooterLines(
   return lines;
 }
 
-/** The throughput/cache stats row, shown above the input. Null when no usage yet. */
 export function buildUsageLine(
   usage: Usage,
   theme: any,

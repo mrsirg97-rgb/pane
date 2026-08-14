@@ -1,8 +1,3 @@
-// Behavioral tests for rem.ts (sqlite-backed memory: learn/recall/reflect/prune).
-// Run: node --test rem.test.mjs
-// Exercises the schema (failure modes live there), idempotent learn, scope model,
-// quarantine-on-corruption, FTS+trigram bookkeeping, and serialized access against
-// a scratch HOME + cwd, so the real ~/.pi/agent/rem is never touched.
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -42,7 +37,6 @@ function use(dir) {
 function openDb() {
   return new DatabaseSync(dbFile);
 }
-/** Raw memory rows, newest first. */
 function memRows() {
   const db = openDb();
   try {
@@ -54,7 +48,6 @@ function memRows() {
     db.close();
   }
 }
-/** Raw trigram rows for a memory. */
 function gramRows(id) {
   const db = openDb();
   try {
@@ -66,7 +59,6 @@ function gramRows(id) {
     db.close();
   }
 }
-/** FTS row for a memory (pinned at rowid = memories.id). */
 function ftsRow(id) {
   const db = openDb();
   try {
@@ -86,14 +78,12 @@ function metaValue(key) {
     db.close();
   }
 }
-/** Id of the single memory with exact content, or null. */
 function idOf(content) {
   const rows = memRows();
   const hit = rows.find((r) => r.content === content);
   return hit ? hit.id : null;
 }
 
-// ---- schema: failure modes live at the schema level ----
 test("bare rem() is schema-invalid (the failure mode)", () => {
   assert.equal(checkSchema({}), false);
   assert.equal(checkSchema(undefined), false);
@@ -120,7 +110,6 @@ test("action enum refuses unknown verbs; shape errors refuse at check", () => {
   assert.equal(checkSchema({ action: "recall", scope: "all" }), true);
 });
 
-// ---- lifecycle ----
 test("store opens empty on first open", () => {
   use(cwd1);
   assert.equal(memRows().length, 0);
@@ -137,7 +126,6 @@ test("corrupt store quarantines (renamed, never deleted) and reads empty", async
   assert.equal(memRows().length, 0); // fresh store is authoritative
 });
 
-// ---- learn ----
 test("learn stores content with scope, kind, importance; mints m1", async () => {
   use(cwd1);
   const r = await tool.execute("t2", {
@@ -154,13 +142,12 @@ test("learn stores content with scope, kind, importance; mints m1", async () => 
   assert.equal(m.id, 1);
   assert.equal(m.kind, "constraint");
   assert.equal(m.importance, 0.8);
-  assert.equal(m.strength, 0.8); // strength starts at importance
+  assert.equal(m.strength, 0.8);
   assert.equal(m.scope, remMod.shortHash(cwd1));
   assert.equal(m.scope_label, "ws1");
   assert.equal(m.access_count, 0);
   assert.equal(m.superseded_by, null);
   assert.match(textOf(r), /learned m1/);
-  // fts + trigram projections exist, pinned at rowid = memories.id
   assert.equal(ftsRow(1).content, "the api returns 429 when the token expires");
   const grams = gramRows(1);
   assert.ok(grams.length > 0);
@@ -188,7 +175,6 @@ test("re-learn accepts importance and supersedes updates on the existing row", a
   assert.equal(r2.details.memories[0].id, id);
   assert.equal(memRows().find((r) => r.content === "upd me").importance, 0.2);
   assert.match(textOf(r2), /importance → 0.2/);
-  // content unchanged; strength untouched by re-learn
   const row = memRows().find((r) => r.content === "upd me");
   assert.equal(row.content, "upd me");
   assert.equal(row.strength, 0.5);
@@ -274,13 +260,12 @@ test("re-learn with supersedes including its own id is a no-op (no self-demotion
   assert.match(textOf(r2), /already known/);
 });
 
-// ---- recall: prose + reserved-word grammar ----
 test("recall by prose intent finds the memory (both arms reach)", async () => {
   use(cwd1);
   await tool.execute("t20", {
     action: "learn",
     content: "the api returns 429 when the token expires",
-  }); // idempotent: also seeds the shared corpus
+  });
   const r = await tool.execute("t21", {
     action: "recall",
     query: "token expires",
@@ -308,7 +293,6 @@ test("no match renders '(no memories)', never an error", async () => {
   assert.match(textOf(r), /\(no memories\)/);
 });
 
-// ---- recall: identifier corpus (the fuzzy arm's reason to exist) ----
 test("identifier corpus: llamaswap finds llama-swap on :8090 (fuzzy)", async () => {
   use(cwd1);
   await tool.execute("t24", {
@@ -319,7 +303,7 @@ test("identifier corpus: llamaswap finds llama-swap on :8090 (fuzzy)", async () 
   const r = await tool.execute("t25", { action: "recall", query: "llamaswap" });
   const hit = r.details.hits.find((h) => h.content.includes("llama-swap"));
   assert.ok(hit, "llamaswap must reach the llama-swap memory");
-  assert.equal(hit.match, "fuzzy"); // FTS lexemes cannot reach the respelling
+  assert.equal(hit.match, "fuzzy");
 });
 
 test("identifier corpus: UD IQ1S finds UD-IQ1_S (both arms)", async () => {
@@ -331,7 +315,6 @@ test("identifier corpus: UD IQ1S finds UD-IQ1_S (both arms)", async () => {
   const r = await tool.execute("t27", { action: "recall", query: "UD IQ1S" });
   const hit = r.details.hits.find((h) => h.content.includes("UD-IQ1_S"));
   assert.ok(hit, "UD IQ1S must reach the UD-IQ1_S memory");
-  // unicode61 keeps '_' inside tokens, so iq1s is a lexeme the FTS arm also reaches
   assert.equal(hit.match, "both");
 });
 
@@ -344,19 +327,17 @@ test("identifier corpus: n-cpu-moe finds the flag memory (both arms)", async () 
   const r = await tool.execute("t29", { action: "recall", query: "n-cpu-moe" });
   const hit = r.details.hits.find((h) => h.content.includes("n-cpu-moe"));
   assert.ok(hit, "n-cpu-moe must reach the flag memory");
-  assert.equal(hit.match, "both"); // lexemes n/cpu/moe all present
+  assert.equal(hit.match, "both");
 });
 
-// ---- recall: fts gate ----
 test("fts-less build disables only the semantic arm; fuzzy fallback still serves", async () => {
   use(cwd1);
-  remMod.__setFtsAvailable(false); // simulate a build without FTS5
+  remMod.__setFtsAvailable(false);
   try {
     const r = await tool.execute("t30", { action: "recall", query: "UD IQ1S" });
     const hit = r.details.hits.find((h) => h.content.includes("UD-IQ1_S"));
     assert.ok(hit);
-    assert.equal(hit.match, "fuzzy"); // semantic arm off, fuzzy-only fallback
-    // learn on the fts-less build must not attempt the FTS insert
+    assert.equal(hit.match, "fuzzy");
     const lr = await tool.execute("t30a", {
       action: "learn",
       content: "ftsless newcomer",
@@ -379,7 +360,6 @@ test("stemming path: 'run fast' reaches an inflected memory", async () => {
   assert.ok(r.details.hits.some((h) => h.content === "running fast"));
 });
 
-// ---- recall: k budget, strength, supersession ----
 test("recall k caps live hits", async () => {
   use(cwd1);
   for (let i = 1; i <= 5; i++) {
@@ -428,8 +408,8 @@ test("effective strength: an aged memory loses to a fresh one, stored strength u
     "decay must be observable without consolidate",
   );
   const row = memRows().find((r) => r.content === "aged fix for widget");
-  assert.equal(row.strength, 0.5); // recall never persists strength
-  assert.equal(row.access_count, 1); // but it does touch the counter
+  assert.equal(row.strength, 0.5);
+  assert.equal(row.access_count, 1);
   assert.ok(row.last_accessed_at != null);
 });
 
@@ -466,7 +446,6 @@ test("superseded memories drop by default; include_superseded fills the unused b
   );
 });
 
-// ---- recall: scope model ----
 test("hybrid scope: project hits first, global fills only the unused budget", async () => {
   use(cwd2);
   await tool.execute("t44", {
@@ -481,17 +460,16 @@ test("hybrid scope: project hits first, global fills only the unused budget", as
   });
   use(cwd1);
   const thin = await tool.execute("t46", { action: "recall", query: "widget" });
-  // ws1 has exactly one live 'widget' memory (new approach); the budget has room for global fill
   const labels = thin.details.hits.map((h) => h.scope_label);
-  assert.equal(labels[0], "ws1"); // project first
-  assert.ok(labels.includes("global")); // fill after the project hit
+  assert.equal(labels[0], "ws1");
+  assert.ok(labels.includes("global"));
   const full = await tool.execute("t47", {
     action: "recall",
     query: "widget",
     k: 1,
   });
   assert.equal(full.details.hits.length, 1);
-  assert.equal(full.details.hits[0].scope_label, "ws1"); // budget full: no global
+  assert.equal(full.details.hits[0].scope_label, "ws1");
 });
 
 test("scope=all interleaves scopes; scope=global excludes project", async () => {
@@ -538,7 +516,6 @@ test("empty query browses latest by effective strength", async () => {
   assert.deepEqual(strengths, sorted);
 });
 
-// ---- reflect ----
 test("reflect stores a distilled memory with source; kind defaults to reflection", async () => {
   use(cwd1);
   const r = await tool.execute("t60", {
@@ -609,7 +586,6 @@ test("session_compact hook is fire-and-forget: bad events never crash", async ()
   assert.equal(memRows().length, before);
 });
 
-// ---- prune ----
 test("prune verb is schema-optional; missing fails at execute (loud)", async () => {
   use(cwd1);
   assert.equal(checkSchema({ action: "prune" }), true);
@@ -641,7 +617,6 @@ test("prune consolidate is idempotent: decays aged strength, resets the window",
     verb: "consolidate",
   });
   const twice = memRows().find((r) => r.content === "consolidate me");
-  // replay with no elapsed time is a no-op; floating-point drift stays below 1e-6
   assert.ok(
     Math.abs(twice.strength - after.strength) < 1e-6,
     "replay with no elapsed time is a no-op",
@@ -652,10 +627,9 @@ test("consolidate reinforces accessed memories and no-ops on fresh ones", async 
   use(cwd1);
   await tool.execute("t74", { action: "learn", content: "fresh target" });
   const fresh = memRows().find((r) => r.content === "fresh target");
-  await tool.execute("t75", { action: "recall", query: "fresh" }); // touch once
+  await tool.execute("t75", { action: "recall", query: "fresh" });
   await tool.execute("t76", { action: "prune", verb: "consolidate" });
   const after = memRows().find((r) => r.content === "fresh target");
-  // no age, but the access reinforces 0.05 x importance
   assert.ok(
     after.strength > 0.5 && after.strength <= 0.6,
     "reinforcement must apply",
@@ -715,7 +689,7 @@ test("prune remove by criteria: older_than_days and kind and scope", async () =>
     verb: "remove",
     older_than_days: 5,
   });
-  assert.match(textOf(r2), /removed 0/); // young survives
+  assert.match(textOf(r2), /removed 0/);
   assert.ok(memRows().find((r) => r.content === "young victim"));
 });
 
@@ -762,7 +736,7 @@ test("prune consolidate honors a selection; no selection means the whole store",
 test("prune remove on a genuinely fts-less store never touches memory_fts", async () => {
   use(cwd1);
   const db = openDb();
-  db.exec("DROP TABLE IF EXISTS memory_fts"); // the table never existed on this build
+  db.exec("DROP TABLE IF EXISTS memory_fts");
   db.close();
   remMod.__setFtsAvailable(false);
   try {
@@ -875,13 +849,12 @@ test("prune remove by ids ignores scope: the ids are the selection", async () =>
   });
   const g = memRows().find((r) => r.content === "global doomed");
   use(cwd1);
-  // default scope = cwd1: an explicit ids selection still needs the right scope filter
   const local = await tool.execute("t96", {
     action: "prune",
     verb: "remove",
     ids: [g.id],
   });
-  assert.match(textOf(local), /removed 1/); // ids selection ignores scope; row is gone
+  assert.match(textOf(local), /removed 1/);
   assert.equal(
     memRows().find((r) => r.content === "global doomed"),
     undefined,
@@ -895,7 +868,6 @@ test("concurrent calls serialize deterministically in call order", async () => {
     tool.execute("t98", { action: "recall", query: "serialized" }),
   ]);
   assert.equal(learned.isError, undefined);
-  // recall queued after learn: must observe the fresh memory
   assert.ok(
     recalled.details.hits.some((h) => h.content === "serialized witness"),
   );

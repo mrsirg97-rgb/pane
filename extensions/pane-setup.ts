@@ -20,9 +20,6 @@ export default function paneSetupExtension(_pi: ExtensionAPI) {
     /* pi runs fine without the themes; never block loading over them */
   }
   try {
-    // Seed the working contract on fresh machines. Never overwrite: the local
-    // copy is the user's live contract; delete it to re-seed from the pack.
-    // (Template name keeps the repo copy out of pi's in-repo context discovery.)
     const contract = fileURLToPath(
       new URL("../AGENTS.template.md", import.meta.url),
     );

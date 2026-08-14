@@ -1,9 +1,6 @@
 import { TuiAltScreen } from "@earendil-works/pi-tui";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-// Fullscreen TUI scrolls 1 line per wheel tick (hardcoded, not a setting), which
-// crawls on phone touch-scroll. Boost by multiplying the wheel delta before pi's
-// own routing; inert in regular tuiMode where the terminal owns scrollback.
 const PATCHED = Symbol.for("pi.scrollSpeedBoost");
 
 export function applyWheelBoost(proto: any, factor: number): boolean {

@@ -8,7 +8,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-// __tests__/ lives inside extensions/; EXT_DIR must point at the sources (one level up).
 export const EXT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const npmRoot = execFileSync("npm", ["root", "-g"], {
@@ -51,8 +50,6 @@ export async function loadExtension(extPath) {
   return jiti.import(extPath);
 }
 
-/** Load an extension and capture its registered tool + event handlers.
- *  Pass { requireTool: false } for extensions that only register events. */
 export async function loadExtensionTool(extPath, { requireTool = true } = {}) {
   const mod = await loadExtension(extPath);
   const factory = typeof mod.default === "function" ? mod.default : mod;
@@ -76,14 +73,10 @@ export async function loadExtensionTool(extPath, { requireTool = true } = {}) {
   return { tool, tools, handlers, exports: mod };
 }
 
-/** An isolated scratch directory for a test (also used as cwd/HOME). */
 export function scratchDir() {
-  // realpath: macOS tmpdir lives under /var -> /private/var symlink, and
-  // process.cwd() always returns the resolved spelling.
   return realpathSync(mkdtempSync(join(tmpdir(), "pi-ext-test-")));
 }
 
-/** TypeBox Value from pi's bundled copy (same code the extension schema uses). */
 export async function typeboxValueModule() {
   return import(pathToFileURL(require.resolve("typebox/value")).href);
 }

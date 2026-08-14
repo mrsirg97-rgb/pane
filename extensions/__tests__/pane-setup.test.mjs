@@ -86,5 +86,8 @@ test("an existing contract is never overwritten", async () => {
   mkdirSync(join(home, ".pi/agent"), { recursive: true });
   writeFileSync(join(home, ".pi/agent/AGENTS.md"), "# my own contract");
   await runSetupWithHome(home);
-  assert.equal(readFileSync(join(home, ".pi/agent/AGENTS.md"), "utf8"), "# my own contract");
+  assert.equal(
+    readFileSync(join(home, ".pi/agent/AGENTS.md"), "utf8"),
+    "# my own contract",
+  );
 });

@@ -1,5 +1,3 @@
-// Shared flat rendering kit for the local extensions. Discovery ignores .mjs,
-// so this stays a library, never an extension.
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { keyHint } from "@earendil-works/pi-coding-agent";
 
@@ -50,8 +48,6 @@ export function errorText(theme, result) {
   return new Text(indent(theme.fg("error", message || "failed")), 0, 0);
 }
 
-/** Collapsed width-aware preview. keep: "head" shows the first lines (hint after),
- *  "tail" the last ones (hint before, matching the built-in bash renderer). */
 export function preview(
   theme,
   ctx,

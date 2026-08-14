@@ -36,8 +36,6 @@ export function shortPath(path: string | undefined, cwd: string): string {
   return out;
 }
 
-/** Line-colored diff via the passed theme; the built-in renderDiff needs the
- *  interactive theme singleton, which only exists inside a live TUI. */
 export function styleDiff(diff: string, theme: any): string {
   return diff
     .split("\n")
@@ -80,18 +78,12 @@ type Restyle = {
   view: { lines: number; keep: "head" | "tail" };
   timed?: boolean;
   body?: (args: any, result: any, theme: any) => string | undefined;
-  /** Qualifier row rendered under the header (own line, never wraps the path). */
   sub?: (args: any, theme: any, cwd: string) => string | undefined;
-  /** Streaming source while the call's args arrive: the raw text plus the file
-   *  line number of its first line (null renders unnumbered). Styling and
-   *  memoization live in renderCall, keyed on this spec. */
   live?: (args: any, state: any, cwd: string) => LiveSpec | undefined;
 };
 
 const LIVE_LINES = 10;
 
-/** Tail of streaming text: faded (toolDiffContext) with dim line numbers and a
- *  dim skip marker, so in-flight content reads as not-yet-final. */
 function liveTail(text: string, base: number | null, theme: any): string {
   const lines = text.split("\n");
   const kept = lines.slice(-LIVE_LINES);
@@ -110,9 +102,6 @@ function liveTail(text: string, base: number | null, theme: any): string {
   return skipped ? `${theme.fg("dim", `… +${skipped} lines`)}\n${body}` : body;
 }
 
-/** File line of oldText's first match, memoized on (path, oldText) in the
- *  per-call state: one file read per edit, none per frame. Null when the
- *  file or match is unavailable; the preview falls back to unnumbered. */
 function editAnchor(
   state: any,
   cwd: string,
@@ -292,8 +281,6 @@ export default function builtinRestyleExtension(pi: ExtensionAPI) {
           !ctx.executionStarted && live
             ? live(args, ctx.state, ctx.cwd)
             : undefined;
-        // While the live tail streams, its skip marker already counts lines;
-        // the qualifier row would double up, so it waits for the call to settle.
         const subText = spec ? undefined : sub?.(args, theme, ctx.cwd);
         if (subText) rows.push(new Text(indent(subText), 0, 0));
         if (spec) {
