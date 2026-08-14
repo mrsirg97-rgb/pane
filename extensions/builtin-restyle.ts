@@ -79,7 +79,23 @@ type Restyle = {
   view: { lines: number; keep: "head" | "tail" };
   timed?: boolean;
   body?: (args: any, result: any, theme: any) => string | undefined;
+  /** Counter row rendered under the header (own line, never wraps the path). */
+  sub?: (args: any, theme: any) => string | undefined;
+  /** Streaming preview while the call's args are still arriving. */
+  live?: (args: any, theme: any) => string | undefined;
 };
+
+const LIVE_LINES = 10;
+
+/** Tail of streaming text, styled as tool output with a dim skip marker. */
+function liveTail(text: unknown, theme: any): string | undefined {
+  if (typeof text !== "string" || !text) return undefined;
+  const lines = text.split("\n");
+  const kept = lines.slice(-LIVE_LINES);
+  const skipped = lines.length - kept.length;
+  const body = kept.map((line) => theme.fg("toolOutput", line)).join("\n");
+  return skipped ? `${theme.fg("dim", `… +${skipped} lines`)}\n${body}` : body;
+}
 
 function restyles(cwd: string, s: Record<string, any>): Restyle[] {
   const pathDetail = (args: any, theme: any, c: string) =>
@@ -128,14 +144,15 @@ function restyles(cwd: string, s: Record<string, any>): Restyle[] {
       view: { lines: 15, keep: "head" },
       detail(args, theme, c) {
         if (!args?.path) return undefined;
-        const lines =
-          typeof args.content === "string"
-            ? args.content.split("\n").length
-            : undefined;
-        return (
-          theme.fg("text", shortPath(args.path, c)) +
-          (lines ? theme.fg("muted", ` ${lines} lines`) : "")
-        );
+        return theme.fg("text", shortPath(args.path, c));
+      },
+      sub(args, theme) {
+        if (typeof args?.content !== "string" || !args.content)
+          return undefined;
+        return theme.fg("muted", `${args.content.split("\n").length} lines`);
+      },
+      live(args, theme) {
+        return liveTail(args?.content, theme);
       },
       body(args, _result, theme) {
         if (typeof args?.content !== "string" || !args.content.trim())
@@ -151,11 +168,17 @@ function restyles(cwd: string, s: Record<string, any>): Restyle[] {
       view: { lines: 15, keep: "head" },
       detail(args, theme, c) {
         if (!args?.path) return undefined;
-        const n = Array.isArray(args.edits) ? args.edits.length : 0;
-        return (
-          theme.fg("text", shortPath(args.path, c)) +
-          (n ? theme.fg("muted", ` ${n} edit${n === 1 ? "" : "s"}`) : "")
-        );
+        return theme.fg("text", shortPath(args.path, c));
+      },
+      sub(args, theme) {
+        const n = Array.isArray(args?.edits) ? args.edits.length : 0;
+        return n
+          ? theme.fg("muted", `${n} edit${n === 1 ? "" : "s"}`)
+          : undefined;
+      },
+      live(args, theme) {
+        const edits = Array.isArray(args?.edits) ? args.edits : [];
+        return liveTail(edits[edits.length - 1]?.newText, theme);
       },
       body(_args, result, theme) {
         const diff = result?.details?.diff;
@@ -200,7 +223,10 @@ function restyles(cwd: string, s: Record<string, any>): Restyle[] {
 export default function builtinRestyleExtension(pi: ExtensionAPI) {
   const cwd = process.cwd();
   const s = piSettings();
-  for (const { def, detail, view, timed, body: bodyFn } of restyles(cwd, s)) {
+  for (const { def, detail, view, timed, body: bodyFn, sub, live } of restyles(
+    cwd,
+    s,
+  )) {
     pi.registerTool({
       ...def,
       renderShell: "self",
@@ -208,7 +234,15 @@ export default function builtinRestyleExtension(pi: ExtensionAPI) {
         if (timed && ctx.executionStarted && ctx.state.startedAt === undefined)
           ctx.state.startedAt = Date.now();
         ctx.state.args = args;
-        return header(theme, ctx, def.name, detail(args, theme, ctx.cwd));
+        const head = header(theme, ctx, def.name, detail(args, theme, ctx.cwd));
+        const rows: any[] = [head];
+        const subText = sub?.(args, theme);
+        if (subText) rows.push(new Text(indent(subText), 0, 0));
+        if (!ctx.executionStarted && live) {
+          const streaming = live(args, theme);
+          if (streaming) rows.push(new Text(indent(streaming), 0, 0));
+        }
+        return rows.length > 1 ? stack(...rows) : head;
       },
       renderResult(result: any, options: any, theme: any, ctx: any) {
         if (

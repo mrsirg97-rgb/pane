@@ -137,7 +137,7 @@ test("write, grep, find, ls calls carry their key argument", () => {
     rendered(tools.get(name).renderCall(args, theme, ctx()));
   assert.match(
     at("write", { path: "/home/ng/Projects/x.ts", content: "a\nb" }),
-    /● write · x\.ts 2 lines/,
+    /● write · x\.ts\s*\n\s+2 lines/,
   );
   assert.match(
     at("grep", {
@@ -183,12 +183,12 @@ test("edit call carries path and edit count; result renders the diff", () => {
   const c = ctx();
   assert.match(
     rendered(edit.renderCall(args, theme, c)),
-    /● edit · x\.ts 2 edits/,
+    /● edit · x\.ts\s*\n\s+2 edits/,
   );
   const single = rendered(
     edit.renderCall({ ...args, edits: [args.edits[0]] }, theme, ctx()),
   );
-  assert.match(single, /1 edit\b/);
+  assert.match(single, /\n\s+1 edit\b/);
   const out = rendered(
     edit.renderResult(
       textResult("ok", { details: { diff: "-1 old line\n+1 new line" } }),
@@ -212,6 +212,46 @@ test("edit result without a diff falls back to the result text", () => {
     ),
   );
   assert.match(out, /nothing to do/);
+});
+
+test("write streams a live tail of the content while args arrive", () => {
+  const write = tools.get("write");
+  const content = Array.from({ length: 14 }, (_, i) => `s${i + 1}`).join("\n");
+  const streaming = rendered(
+    write.renderCall(
+      { path: "/home/ng/Projects/x.ts", content },
+      theme,
+      ctx({ executionStarted: false, argsComplete: false }),
+    ),
+  );
+  assert.match(streaming, /s14\b/);
+  assert.match(streaming, /s5\b/);
+  assert.doesNotMatch(streaming, /s4\b/);
+  assert.match(streaming, /\+4 lines/);
+  const settled = rendered(
+    write.renderCall({ path: "/home/ng/Projects/x.ts", content }, theme, ctx()),
+  );
+  assert.doesNotMatch(settled, /s14\b/); // execution started: preview belongs to the result
+});
+
+test("edit streams a live tail of the newest edit's newText", () => {
+  const edit = tools.get("edit");
+  const streaming = rendered(
+    edit.renderCall(
+      {
+        path: "/home/ng/Projects/x.ts",
+        edits: [
+          { oldText: "a", newText: "done" },
+          { oldText: "b", newText: "line one\nline two" },
+        ],
+      },
+      theme,
+      ctx({ executionStarted: false, argsComplete: false }),
+    ),
+  );
+  assert.match(streaming, /line one/);
+  assert.match(streaming, /line two/);
+  assert.doesNotMatch(streaming, /\bdone\b/); // only the newest edit streams
 });
 
 test("errors render as error text, width 34 stays intact", () => {
