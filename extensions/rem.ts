@@ -1,8 +1,8 @@
-import { mkdirSync, renameSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { openDb, withLog, withStore as withStoreShared } from "./sqlite.ts";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -126,92 +126,28 @@ function detectFts(db: DatabaseSync): boolean {
   }
 }
 
-function openRaw(): DatabaseSync {
-  const db = new DatabaseSync(dbPath());
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA busy_timeout = 5000");
-  db.exec("PRAGMA foreign_keys = ON");
-  db.exec(SCHEMA);
-  return db;
-}
-
-/** Rename a corrupt store aside, never delete: memories are long-lived
- *  evidence. The fresh store takes the canonical path; recovery reads the
- *  quarantine file. */
-function quarantine(p: string) {
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  try {
-    renameSync(p, `${p}.corrupt-${stamp}`);
-  } catch {
-    /* absent sidecar files are fine; the main file always moves */
-  }
-}
-
-/** Open the store. Fail closed on corruption: a database that fails to open
- *  or fails integrity check is quarantined (renamed aside, evidence survives)
- *  and recreated empty, never partially read. FTS5 capability is detected
- *  per open and rides the handle, never persisted. */
-function openStore(): Store {
-  const p = dbPath();
-  mkdirSync(DIR, { recursive: true });
-  try {
-    const db = openRaw();
-    const check = db.prepare("PRAGMA integrity_check").get() as {
-      integrity_check?: string;
-    };
-    if (check && check.integrity_check === "ok") {
-      return { db, fts: ftsOverride ?? detectFts(db) };
-    }
-    db.close();
-  } catch {
-    // corrupt or unreadable: fall through to quarantine + recreate
-  }
-  quarantine(p);
-  quarantine(`${p}-wal`);
-  quarantine(`${p}-shm`);
-  const db = openRaw();
-  return { db, fts: ftsOverride ?? detectFts(db) };
-}
-
-let busy: Promise<void> = Promise.resolve();
-async function withLog<T>(fn: () => T): Promise<T> {
-  const prev = busy;
-  let release!: () => void;
-  busy = new Promise<void>((r) => (release = r));
-  await prev;
-  try {
-    return fn();
-  } finally {
-    release();
-  }
-}
+/** The store opened through the shared sqlite.ts lifecycle with the
+ *  quarantine policy: memories are irreplaceable evidence, so a corrupt
+ *  store is renamed aside, never deleted. FTS5 capability is detected per
+ *  open and rides the handle, never persisted. */
+const STORE_OPTS = {
+  path: dbPath(),
+  schema: SCHEMA,
+  policy: "quarantine" as const,
+  configure: (db: DatabaseSync) => db.exec("PRAGMA foreign_keys = ON"),
+};
 
 /** One transaction per call: open, BEGIN IMMEDIATE, run, COMMIT. Any throw
  *  rolls back; the connection always checkpoints and closes. The handle
  *  carries the FTS5 capability for this open. */
 function withStore<T>(fn: (store: Store) => T): T {
-  const store = openStore();
-  const { db } = store;
-  try {
-    db.exec("BEGIN IMMEDIATE");
-    const result = fn(store);
-    db.exec("COMMIT");
-    return result;
-  } catch (err) {
-    try {
-      db.exec("ROLLBACK");
-    } catch {
-      /* already committed or never begun */
-    }
-    throw err;
-  } finally {
-    try {
-      db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    } catch {
-      /* read-only or closed */
-    }
-    db.close();
-  }
+  return withStoreShared(
+    STORE_OPTS,
+    (db) => {
+      return { db, fts: ftsOverride ?? detectFts(db) };
+    },
+    fn,
+  );
 }
 
 export function shortHash(cwd: string): string {

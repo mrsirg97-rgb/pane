@@ -1,8 +1,8 @@
-import { mkdirSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { openDb, withLog, withStore } from "./sqlite.ts";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -77,34 +77,11 @@ function dbPath(): string {
   return join(DIR, `${key}.sqlite`);
 }
 
-/** Open the workspace database. Fail closed on corruption: a database that fails
- *  to open or fails integrity check is recreated empty, never partially read. */
-function openDb(): DatabaseSync {
-  const p = dbPath();
-  mkdirSync(DIR, { recursive: true });
-  try {
-    const db = new DatabaseSync(p);
-    db.exec("PRAGMA journal_mode = WAL");
-    db.exec("PRAGMA busy_timeout = 5000");
-    db.exec(SCHEMA);
-    const check = db.prepare("PRAGMA integrity_check").get() as {
-      integrity_check?: string;
-    };
-    if (check && check.integrity_check === "ok") {
-      return db;
-    }
-    db.close();
-  } catch {
-    // corrupt or unreadable: fall through to recreate
-  }
-  rmSync(p, { force: true });
-  rmSync(`${p}-wal`, { force: true });
-  rmSync(`${p}-shm`, { force: true });
-  const db = new DatabaseSync(p);
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA busy_timeout = 5000");
-  db.exec(SCHEMA);
-  return db;
+/** The store opened through the shared sqlite.ts lifecycle with the delete
+ *  policy: the queue is short-lived, so a corrupt store is recreated empty,
+ *  never partially read. Resolved per call: the path hashes the cwd. */
+function storeOpts(): { path: string; schema: string; policy: "delete" } {
+  return { path: dbPath(), schema: SCHEMA, policy: "delete" };
 }
 
 /** Replay the event log into a projection map. Total: never throws; bad rows are skipped. */
@@ -366,19 +343,6 @@ function fail(message: string): never {
   throw new Error(`todo: ${message}`);
 }
 
-let busy: Promise<void> = Promise.resolve();
-async function withLog<T>(fn: () => T): Promise<T> {
-  const prev = busy;
-  let release!: () => void;
-  busy = new Promise<void>((r) => (release = r));
-  await prev;
-  try {
-    return fn();
-  } finally {
-    release();
-  }
-}
-
 const TASK_GLYPH: Record<Status, [string, string]> = {
   pending: ["○", "dim"],
   in_progress: ["◐", "accent"],
@@ -509,151 +473,135 @@ export default function todoExtension(pi: ExtensionAPI) {
       return args;
     },
     async execute(_toolCallId, params: any) {
-      return withLog(() => {
-        const action = params.action;
-        const db = openDb();
-        try {
-          db.exec("BEGIN IMMEDIATE");
-          const map = replay(db);
+      return withLog(() =>
+        withStore(
+          storeOpts(),
+          (db) => db,
+          (db) => {
+            const action = params.action;
+            const map = replay(db);
 
-          const reply = (note?: string) => {
-            const ordered = [...map.values()].sort(
-              (a, b) => a.pos - b.pos || a.created_seq - b.created_seq,
-            );
-            const tasks: TaskView[] = ordered.map((t) => ({
-              id: t.id,
-              text: t.text,
-              status: t.status,
-              dependsOn: t.dependsOn,
-              blockedBy: blockedBy(map, t),
-            }));
-            const footer = staleFooter(db);
-            const text = [note && `→ ${note}`, render(tasks), footer]
-              .filter(Boolean)
-              .join("\n");
-            return {
-              content: [{ type: "text", text }],
-              details: { action, tasks },
+            const reply = (note?: string) => {
+              const ordered = [...map.values()].sort(
+                (a, b) => a.pos - b.pos || a.created_seq - b.created_seq,
+              );
+              const tasks: TaskView[] = ordered.map((t) => ({
+                id: t.id,
+                text: t.text,
+                status: t.status,
+                dependsOn: t.dependsOn,
+                blockedBy: blockedBy(map, t),
+              }));
+              const footer = staleFooter(db);
+              const text = [note && `→ ${note}`, render(tasks), footer]
+                .filter(Boolean)
+                .join("\n");
+              return {
+                content: [{ type: "text", text }],
+                details: { action, tasks },
+              };
             };
-          };
 
-          if (action === "read") {
-            persist(db, map);
-            db.exec("COMMIT");
-            return reply();
-          }
-
-          if (action === "create") {
-            const incoming =
-              params.tasks ??
-              fail("action 'create' requires tasks: array of {text}");
-            const plan = planCreate(map, incoming);
-            validateDeps(map, plan);
-            const append = db
-              .prepare(
-                "INSERT INTO events (op, args, session) VALUES ('create', ?, NULL)",
-              )
-              .run(JSON.stringify({ tasks: incoming }));
-            applyEvent(map, Number(append.lastInsertRowid), "create", {
-              tasks: incoming,
-            });
-            persist(db, map);
-            db.exec("COMMIT");
-            return reply(
-              incoming.length
-                ? `queue replaced with ${incoming.length} tasks`
-                : "queue cleared",
-            );
-          }
-
-          const id = params.id ?? fail(`action '${action}' requires id`);
-          const t = find(map, id) ?? fail(`no task '${id}'`);
-          if (action === "start") {
-            if (t.status === "in_progress")
-              fail(`'${id}' is already in progress`);
-            if (t.status === "done") fail(`'${id}' is done; read-only`);
-            if (t.status === "failed") fail(`'${id}' failed; retry it first`);
-            const append = db
-              .prepare(
-                "INSERT INTO events (op, args, session) VALUES ('start', ?, NULL)",
-              )
-              .run(JSON.stringify({ id }));
-            applyEvent(map, Number(append.lastInsertRowid), "start", { id });
-            persist(db, map);
-            db.exec("COMMIT");
-            return reply(`'${id}' started`);
-          }
-
-          if (action === "complete") {
-            if (t.status === "pending")
-              fail(`'${id}' is pending; start it first`);
-            if (t.status === "done") fail(`'${id}' is done; read-only`);
-            if (t.status === "failed") fail(`'${id}' failed; retry it first`);
-            const depId = t.dependsOn;
-            const blocker = depId ? find(map, depId) : undefined;
-            if (blocker && blocker.status !== "done") {
-              const hint =
-                blocker.status === "pending"
-                  ? "pending; start it first"
-                  : blocker.status === "failed"
-                    ? "failed; retry it first"
-                    : "in_progress";
-              fail(`'${id}' is blocked by '${depId}' (${hint})`);
+            if (action === "read") {
+              persist(db, map);
+              return reply();
             }
+
+            if (action === "create") {
+              const incoming =
+                params.tasks ??
+                fail("action 'create' requires tasks: array of {text}");
+              const plan = planCreate(map, incoming);
+              validateDeps(map, plan);
+              const append = db
+                .prepare(
+                  "INSERT INTO events (op, args, session) VALUES ('create', ?, NULL)",
+                )
+                .run(JSON.stringify({ tasks: incoming }));
+              applyEvent(map, Number(append.lastInsertRowid), "create", {
+                tasks: incoming,
+              });
+              persist(db, map);
+              return reply(
+                incoming.length
+                  ? `queue replaced with ${incoming.length} tasks`
+                  : "queue cleared",
+              );
+            }
+
+            const id = params.id ?? fail(`action '${action}' requires id`);
+            const t = find(map, id) ?? fail(`no task '${id}'`);
+            if (action === "start") {
+              if (t.status === "in_progress")
+                fail(`'${id}' is already in progress`);
+              if (t.status === "done") fail(`'${id}' is done; read-only`);
+              if (t.status === "failed") fail(`'${id}' failed; retry it first`);
+              const append = db
+                .prepare(
+                  "INSERT INTO events (op, args, session) VALUES ('start', ?, NULL)",
+                )
+                .run(JSON.stringify({ id }));
+              applyEvent(map, Number(append.lastInsertRowid), "start", { id });
+              persist(db, map);
+              return reply(`'${id}' started`);
+            }
+
+            if (action === "complete") {
+              if (t.status === "pending")
+                fail(`'${id}' is pending; start it first`);
+              if (t.status === "done") fail(`'${id}' is done; read-only`);
+              if (t.status === "failed") fail(`'${id}' failed; retry it first`);
+              const depId = t.dependsOn;
+              const blocker = depId ? find(map, depId) : undefined;
+              if (blocker && blocker.status !== "done") {
+                const hint =
+                  blocker.status === "pending"
+                    ? "pending; start it first"
+                    : blocker.status === "failed"
+                      ? "failed; retry it first"
+                      : "in_progress";
+                fail(`'${id}' is blocked by '${depId}' (${hint})`);
+              }
+              const append = db
+                .prepare(
+                  "INSERT INTO events (op, args, session) VALUES ('complete', ?, NULL)",
+                )
+                .run(JSON.stringify({ id }));
+              applyEvent(map, Number(append.lastInsertRowid), "complete", {
+                id,
+              });
+              persist(db, map);
+              return reply(`'${id}' completed`);
+            }
+
+            if (action === "fail") {
+              if (t.status === "pending")
+                fail(`'${id}' is pending; start it first`);
+              if (t.status === "done") fail(`'${id}' is done; read-only`);
+              if (t.status === "failed") fail(`'${id}' is already failed`);
+              const append = db
+                .prepare(
+                  "INSERT INTO events (op, args, session) VALUES ('fail', ?, NULL)",
+                )
+                .run(JSON.stringify({ id }));
+              applyEvent(map, Number(append.lastInsertRowid), "fail", { id });
+              persist(db, map);
+              return reply(`'${id}' failed`);
+            }
+
+            if (t.status !== "failed")
+              fail(`'${id}' is not failed; nothing to retry`);
             const append = db
               .prepare(
-                "INSERT INTO events (op, args, session) VALUES ('complete', ?, NULL)",
+                "INSERT INTO events (op, args, session) VALUES ('retry', ?, NULL)",
               )
               .run(JSON.stringify({ id }));
-            applyEvent(map, Number(append.lastInsertRowid), "complete", { id });
+            applyEvent(map, Number(append.lastInsertRowid), "retry", { id });
             persist(db, map);
-            db.exec("COMMIT");
-            return reply(`'${id}' completed`);
-          }
-
-          if (action === "fail") {
-            if (t.status === "pending")
-              fail(`'${id}' is pending; start it first`);
-            if (t.status === "done") fail(`'${id}' is done; read-only`);
-            if (t.status === "failed") fail(`'${id}' is already failed`);
-            const append = db
-              .prepare(
-                "INSERT INTO events (op, args, session) VALUES ('fail', ?, NULL)",
-              )
-              .run(JSON.stringify({ id }));
-            applyEvent(map, Number(append.lastInsertRowid), "fail", { id });
-            persist(db, map);
-            db.exec("COMMIT");
-            return reply(`'${id}' failed`);
-          }
-
-          if (t.status !== "failed")
-            fail(`'${id}' is not failed; nothing to retry`);
-          const append = db
-            .prepare(
-              "INSERT INTO events (op, args, session) VALUES ('retry', ?, NULL)",
-            )
-            .run(JSON.stringify({ id }));
-          applyEvent(map, Number(append.lastInsertRowid), "retry", { id });
-          persist(db, map);
-          db.exec("COMMIT");
-          return reply(`'${id}' back to pending`);
-        } catch (err) {
-          try {
-            db.exec("ROLLBACK");
-          } catch {
-            /* already committed or never begun */
-          }
-          throw err;
-        } finally {
-          try {
-            db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-          } catch {
-            /* read-only or closed */
-          }
-          db.close();
-        }
-      });
+            return reply(`'${id}' back to pending`);
+          },
+        ),
+      );
     },
   });
 }
