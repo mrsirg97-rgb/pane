@@ -72,7 +72,7 @@ test("bash call shows $ command with multiline and timeout hints", () => {
   const multi = rendered(
     bash.renderCall({ command: "a\nb\nc", timeout: 30 }, theme, ctx()),
   );
-  assert.match(multi, /\$ a \+2 lines \(timeout 30s\)/);
+  assert.match(multi, /\$ a\s*\n\s+\+2 lines · timeout 30s/);
 });
 
 test("bash result appends a duration and previews the tail", () => {
@@ -120,7 +120,7 @@ test("read call shows path with range, result previews the head", () => {
       ctx(),
     ),
   );
-  assert.match(call, /● read · lift\/main\.c \(from 10 · 40 lines\)/);
+  assert.match(call, /● read · lift\/main\.c\s*\n\s+from 10 · 40 lines/);
   const out = rendered(
     read.renderResult(
       textResult("1\n2\n3\n4\n5\n6\n7"),
@@ -146,9 +146,13 @@ test("write, grep, find, ls calls carry their key argument", () => {
       path: "/home/ng/Projects/lift",
       glob: "*.c",
     }),
-    /● grep · fetchGuarded in lift \*\.c/,
+    /● grep · fetchGuarded\s*\n\s+in lift \*\.c/,
   );
   assert.match(at("find", { pattern: "*.test.mjs" }), /● find · \*\.test\.mjs/);
+  assert.match(
+    at("find", { pattern: "*.ts", path: "/home/ng/Projects/lift" }),
+    /● find · \*\.ts\s*\n\s+in lift/,
+  );
   assert.match(at("ls", { path: "/home/ng/Projects" }), /● ls · \./);
 });
 
@@ -231,6 +235,7 @@ test("write streams a live tail of the content while args arrive", () => {
   assert.match(streaming, /\+4 lines/);
   assert.match(streaming, /\b5 s5\b/); // real file line numbers on the tail
   assert.match(streaming, /\b14 s14\b/);
+  assert.doesNotMatch(streaming, /14 lines/); // counter row waits: the tail's marker counts
   const settled = rendered(
     write.renderCall({ path: "/home/ng/Projects/x.ts", content }, theme, ctx()),
   );
