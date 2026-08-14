@@ -1350,6 +1350,65 @@ test("details carry the owner; foreign claims show in renders", async () => {
   assert.match(textOf(read), /claimed by sess-a/);
 });
 
+test("the start reply itself already carries the claim", async () => {
+  const cwd = join(scratch, "ws53b");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await call(
+    "t177a",
+    { action: "create", tasks: [{ text: "instant" }] },
+    sessA,
+  );
+  const id = idOf(
+    "instant",
+    textOf(await call("t177b", { action: "read" }, sessA)),
+  );
+  const started = await call("t177c", { action: "start", id }, sessA);
+  const own = started.details.tasks.find((t) => t.id === id);
+  assert.equal(own.owner, "sess-a"); // not null: the reply reflects the event it appended
+  assert.equal(started.details.session, "sess-a"); // reply stamps who answered
+});
+
+test("TUI render trusts the reply session: own claims unlabeled, foreign labeled", async () => {
+  const cwd = join(scratch, "ws53c");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const theme = {
+    fg: (_c, t) => t,
+    bg: (_c, t) => t,
+    bold: (t) => t,
+  };
+  await call("t177d", { action: "create", tasks: [{ text: "mine" }] }, sessA);
+  const id = idOf(
+    "mine",
+    textOf(await call("t177e", { action: "read" }, sessA)),
+  );
+  const started = await call("t177f", { action: "start", id }, sessA);
+  // render context has no sessionManager on purpose: the reply's session rules
+  const renderCtx = { state: {}, cwd };
+  const own = tool
+    .renderResult(
+      started,
+      { expanded: false, isPartial: false },
+      theme,
+      renderCtx,
+    )
+    .render(80)
+    .join("\n");
+  assert.doesNotMatch(own, /claimed by/);
+  const foreign = await call("t177g", { action: "read" }, sessB);
+  const other = tool
+    .renderResult(
+      foreign,
+      { expanded: false, isPartial: false },
+      theme,
+      renderCtx,
+    )
+    .render(80)
+    .join("\n");
+  assert.match(other, /claimed by sess-a/);
+});
+
 // ---- compaction ----
 /** Age the log past the compaction threshold with ghost events (no-op starts). */
 function ageLog(cwd) {

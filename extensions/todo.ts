@@ -630,12 +630,13 @@ export default function todoExtension(pi: ExtensionAPI) {
             : undefined;
       return header(theme, ctx, "todo", detail);
     },
-    renderResult(result, _options, theme, ctx) {
+    renderResult(result, _options, theme, _ctx) {
       if (result.isError) return errorText(theme, result);
-      const tasks =
-        (result.details as { tasks?: TaskView[] } | undefined)?.tasks ?? [];
+      // The render context has no session; the reply stamps who answered.
+      const d = result.details as
+        { tasks?: TaskView[]; session?: string } | undefined;
       return new Text(
-        indent(renderQueue(theme, tasks, currentSession(ctx))),
+        indent(renderQueue(theme, d?.tasks ?? [], d?.session ?? "anon")),
         0,
         0,
       );
@@ -690,7 +691,7 @@ export default function todoExtension(pi: ExtensionAPI) {
                 .join("\n");
               return {
                 content: [{ type: "text", text }],
-                details: { action, tasks },
+                details: { action, tasks, session },
               };
             };
 
@@ -710,9 +711,13 @@ export default function todoExtension(pi: ExtensionAPI) {
                   "INSERT INTO events (op, args, session) VALUES ('create', ?, ?)",
                 )
                 .run(JSON.stringify({ tasks: incoming }), session);
-              applyEvent(map, Number(append.lastInsertRowid), "create", {
-                tasks: incoming,
-              });
+              applyEvent(
+                map,
+                Number(append.lastInsertRowid),
+                "create",
+                { tasks: incoming },
+                session,
+              );
               persist(db, map);
               return reply(
                 incoming.length
@@ -735,10 +740,13 @@ export default function todoExtension(pi: ExtensionAPI) {
                   "INSERT INTO events (op, args, session) VALUES ('move', ?, ?)",
                 )
                 .run(JSON.stringify({ id, pos }), session);
-              applyEvent(map, Number(append.lastInsertRowid), "move", {
-                id,
-                pos,
-              });
+              applyEvent(
+                map,
+                Number(append.lastInsertRowid),
+                "move",
+                { id, pos },
+                session,
+              );
               persist(db, map);
               return reply(`'${id}' moved to position ${pos}`);
             }
@@ -756,7 +764,13 @@ export default function todoExtension(pi: ExtensionAPI) {
                   "INSERT INTO events (op, args, session) VALUES ('start', ?, ?)",
                 )
                 .run(JSON.stringify({ id }), session);
-              applyEvent(map, Number(append.lastInsertRowid), "start", { id });
+              applyEvent(
+                map,
+                Number(append.lastInsertRowid),
+                "start",
+                { id },
+                session,
+              );
               persist(db, map);
               return reply(`'${id}' started`);
             }
@@ -787,9 +801,13 @@ export default function todoExtension(pi: ExtensionAPI) {
                   "INSERT INTO events (op, args, session) VALUES ('complete', ?, ?)",
                 )
                 .run(JSON.stringify({ id }), session);
-              applyEvent(map, Number(append.lastInsertRowid), "complete", {
-                id,
-              });
+              applyEvent(
+                map,
+                Number(append.lastInsertRowid),
+                "complete",
+                { id },
+                session,
+              );
               persist(db, map);
               return reply(`'${id}' completed`);
             }
@@ -805,7 +823,13 @@ export default function todoExtension(pi: ExtensionAPI) {
                   "INSERT INTO events (op, args, session) VALUES ('fail', ?, ?)",
                 )
                 .run(JSON.stringify({ id }), session);
-              applyEvent(map, Number(append.lastInsertRowid), "fail", { id });
+              applyEvent(
+                map,
+                Number(append.lastInsertRowid),
+                "fail",
+                { id },
+                session,
+              );
               persist(db, map);
               return reply(
                 released
@@ -821,7 +845,13 @@ export default function todoExtension(pi: ExtensionAPI) {
                 "INSERT INTO events (op, args, session) VALUES ('retry', ?, ?)",
               )
               .run(JSON.stringify({ id }), session);
-            applyEvent(map, Number(append.lastInsertRowid), "retry", { id });
+            applyEvent(
+              map,
+              Number(append.lastInsertRowid),
+              "retry",
+              { id },
+              session,
+            );
             persist(db, map);
             return reply(`'${id}' back to pending`);
           },
