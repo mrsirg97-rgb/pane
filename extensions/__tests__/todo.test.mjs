@@ -1255,7 +1255,10 @@ test("start by a foreign session refuses and names the claimer", async () => {
   mkdirSync(cwd, { recursive: true });
   use(cwd);
   await call("t151", { action: "create", tasks: [{ text: "claimed" }] }, sessA);
-  const id = idOf("claimed", textOf(await call("t152", { action: "read" }, sessA)));
+  const id = idOf(
+    "claimed",
+    textOf(await call("t152", { action: "read" }, sessA)),
+  );
   await call("t153", { action: "start", id }, sessA);
   await assert.rejects(
     () => call("t154", { action: "start", id }, sessB),
@@ -1268,7 +1271,10 @@ test("fail is the takeover path: foreign fail -> retry -> start -> complete", as
   mkdirSync(cwd, { recursive: true });
   use(cwd);
   await call("t155", { action: "create", tasks: [{ text: "handoff" }] }, sessA);
-  const id = idOf("handoff", textOf(await call("t156", { action: "read" }, sessA)));
+  const id = idOf(
+    "handoff",
+    textOf(await call("t156", { action: "read" }, sessA)),
+  );
   await call("t157", { action: "start", id }, sessA);
   // B takes over: fail is allowed from anyone
   const failed = await call("t158", { action: "fail", id }, sessB);
@@ -1287,8 +1293,15 @@ test("owner is derived from the log, not the projection", async () => {
   const cwd = join(scratch, "ws51");
   mkdirSync(cwd, { recursive: true });
   use(cwd);
-  await call("t162", { action: "create", tasks: [{ text: "ownership" }] }, sessA);
-  const id = idOf("ownership", textOf(await call("t163", { action: "read" }, sessA)));
+  await call(
+    "t162",
+    { action: "create", tasks: [{ text: "ownership" }] },
+    sessA,
+  );
+  const id = idOf(
+    "ownership",
+    textOf(await call("t163", { action: "read" }, sessA)),
+  );
   await call("t164", { action: "start", id }, sessA);
   // wipe the projection: a read rebuilds it, and the claim must survive
   const db = openDb(cwd);
@@ -1307,7 +1320,10 @@ test("failed tasks carry no owner; any session may retry", async () => {
   mkdirSync(cwd, { recursive: true });
   use(cwd);
   await call("t167", { action: "create", tasks: [{ text: "bail" }] }, sessA);
-  const id = idOf("bail", textOf(await call("t168", { action: "read" }, sessA)));
+  const id = idOf(
+    "bail",
+    textOf(await call("t168", { action: "read" }, sessA)),
+  );
   await call("t169", { action: "start", id }, sessA);
   await call("t170", { action: "fail", id }, sessB); // free fail
   // B's complete after retry+start must not hit a claim refusal
@@ -1322,7 +1338,10 @@ test("details carry the owner; foreign claims show in renders", async () => {
   mkdirSync(cwd, { recursive: true });
   use(cwd);
   await call("t174", { action: "create", tasks: [{ text: "watched" }] }, sessA);
-  const id = idOf("watched", textOf(await call("t175", { action: "read" }, sessA)));
+  const id = idOf(
+    "watched",
+    textOf(await call("t175", { action: "read" }, sessA)),
+  );
   await call("t176", { action: "start", id }, sessA);
   const read = await call("t177", { action: "read" }, sessB);
   const d = read.details;
@@ -1353,7 +1372,10 @@ test("a mutation past the threshold compacts: log collapses to snapshot + mutati
     tasks: [{ text: "alpha" }, { text: "beta" }],
   });
   ageLog(cwd);
-  const bId = idOf("beta", textOf(await tool.execute("t179", { action: "read" })));
+  const bId = idOf(
+    "beta",
+    textOf(await tool.execute("t179", { action: "read" })),
+  );
   await tool.execute("t180", { action: "start", id: bId });
   const rows = eventRows(cwd);
   assert.equal(rows.length, 2); // bounded: compact + the mutation
@@ -1378,7 +1400,10 @@ test("the compact snapshot is a full pre-mutation capture", async () => {
     tasks: [{ text: "alpha" }, { text: "beta" }],
   });
   ageLog(cwd);
-  const bId = idOf("beta", textOf(await tool.execute("t182", { action: "read" })));
+  const bId = idOf(
+    "beta",
+    textOf(await tool.execute("t182", { action: "read" })),
+  );
   await tool.execute("t183", { action: "start", id: bId });
   const rows = eventRows(cwd);
   const snap = JSON.parse(rows[0].args).tasks;
@@ -1400,7 +1425,10 @@ test("replay reproduces the queue after compaction; tamper self-heals", async ()
     tasks: [{ text: "alpha" }, { text: "beta" }],
   });
   ageLog(cwd);
-  const bId = idOf("beta", textOf(await tool.execute("t185", { action: "read" })));
+  const bId = idOf(
+    "beta",
+    textOf(await tool.execute("t185", { action: "read" })),
+  );
   await tool.execute("t186", { action: "start", id: bId });
   // scramble the projection; events unchanged
   const db = openDb(cwd);
@@ -1460,7 +1488,10 @@ test("staleness epoch resets after compaction; the footer still fires", async ()
   const cwd = join(scratch, "ws59");
   mkdirSync(cwd, { recursive: true });
   use(cwd);
-  await tool.execute("t195", { action: "create", tasks: [{ text: "ancient" }] });
+  await tool.execute("t195", {
+    action: "create",
+    tasks: [{ text: "ancient" }],
+  });
   ageLog(cwd);
   const id = idOf(
     "ancient",
@@ -1489,5 +1520,8 @@ test("read never compacts", async () => {
   const read = await tool.execute("t200", { action: "read" });
   assert.equal(read.isError, undefined);
   assert.equal(eventRows(cwd).length, before); // nothing appended
-  assert.equal(eventRows(cwd).some((r) => r.op === "compact"), false);
+  assert.equal(
+    eventRows(cwd).some((r) => r.op === "compact"),
+    false,
+  );
 });
