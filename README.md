@@ -2,7 +2,7 @@
 
 **pane** — a clear pane for [pi](https://github.com/earendil-works/pi). Flat chrome, status glyphs, honest state. For you and your agent: same glass, both sides.
 
-No fork. Nine extensions on stock pi's public hooks; delete any file, get vanilla back.
+No fork. Ten extensions on stock pi's public hooks; delete any file, get vanilla back.
 
 ```
 ● bash · $ node --test +1 lines
@@ -29,6 +29,7 @@ one visual language, both directions. status glyphs `○ ◐ ● ✕` everywhere
 **the agent's side**
 
 - `todo` — a concurrent job queue wearing a todo UI. enforced FSM (pending -> in_progress -> done | failed; failed -> retry), minted ids, several tasks in flight, batched transitions serialized against fresh state. illegal transitions return errors that teach the protocol.
+- `rem` — a memory tool: learn commits facts and constraints (idempotent, scoped global or per-project), recall is fuzzy/semantic search over past solutions with project-first global-fill, reflect stores distilled logs (and auto-parks compaction summaries), prune consolidates strength decay or removes/reduces. sqlite-backed, corruption quarantined aside, never deleted.
 - `python` — persistent IPython kernel; state survives across calls; timeouts kill only their own cell.
 - `web-search` + `web-fetch` — SearXNG search, guarded fetch: DNS refusal of private space with readable errors, redirects re-checked, byte/char caps with loud truncation markers, trafilatura extraction. optional egress proxy for connect-time enforcement.
 - `tool-retry-guard` — 3 consecutive failures of one tool -> a note telling the model to stop retrying blindly.
