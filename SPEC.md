@@ -1,6 +1,6 @@
 # SPEC: todo v2 — task tracking without losing the queue
 
-Status: implemented (TDD, clean break). 119/119 tests green. Implementation: extensions/todo.ts v2 + extensions/**tests**/todo.test.mjs. See git diff; review before commit. Companion to README.md (philosophy) and AGENTS.md (contract).
+Status: implemented through rev 2 (TDD, clean break). 226/226 tests green. Implementation: extensions/todo.ts v2 + extensions/**tests**/todo.test.mjs, plus rev 1 (dependsOn) and rev 2 (move, claim semantics, compaction). Companion to README.md (philosophy) and AGENTS.md (contract).
 
 ## Problem
 
@@ -59,8 +59,8 @@ Rules:
 - Every call is one transaction: read the log, rebuild the projection, (append the event for a mutation), persist the projection. A torn write cannot desync log from projection because the projection is _always_ rebuilt from the log; it is never trusted.
 - `read` appends no events. It rebuilds + persists the projection and renders from it.
 - Replay is total: it never throws. A corrupt args JSON or an inapplicable transition (e.g. `complete` on an unknown id) is skipped, never fatal. The log is the spine; one bad row cannot invalidate the queue.
-- `events` is append-only by construction: `UPDATE`/`DELETE` on events are forbidden by the tool. Compaction is a future story.
-- **Position is minted, never mutable state.** On create, new texts get the next free positions (after the current max); existing texts keep their position and status. On a fresh queue this equals the create array index. No reorder op exists; when one is added it must be a new event (`move`), not an in-place UPDATE.
+- `events` is append-only by construction: the tool never UPDATEs events; the only DELETEs are compaction, which snapshots the queue first (see Rev 2).
+- **Position is minted, never mutable state.** On create, new texts get the next free positions (after the current max); existing texts keep their position and status. On a fresh queue this equals the create array index. Reorder is a `move` event, never an in-place UPDATE (see Rev 2).
 - **Corruption fails closed.** Open + integrity check; on failure the database file is recreated empty (no crash, no partial queue). The queue is gone, honestly, not guessed. (Events live in the same file; a corrupt file means the log is unrecoverable.)
 
 ### B. Idempotent create (upsert by natural key)
@@ -101,11 +101,40 @@ Scope: this is the cheapest honest version of "startup presence". A future foote
 
 ### E. Explicitly out of scope
 
-- Dependencies (`dependsOn`), priorities, due dates, estimates. `next` stays "first pending". Schema creep rejected.
-- Cross-process CAS/ownership (`owner: sessionId`). LWW stays, but now detectable via the log instead of silent. Ownership is a future spec.
+- ~~Dependencies~~ — shipped in rev 1 (dependsOn task trees).
+- ~~Cross-process CAS/ownership~~ — shipped in rev 2 (claim semantics).
+- ~~Event log compaction~~ — shipped in rev 2 (snapshot + epoch reset).
+- ~~Move reorder op~~ — shipped in rev 2 (minted-position events).
+- Priorities, due dates, estimates. `next` stays "first pending". Schema creep rejected.
 - Automatic startup injection into the system prompt. The reply-footer surfacing (C) is the minimal version.
-- Event log compaction. Events grow unbounded by design; the log is the recovery + audit spine. Compaction is a future story.
 - Migration from the legacy JSON store. Clean break; the legacy file is simply never read again.
+
+## Rev 2: move, claim semantics, compaction
+
+Shipped in one TDD pass, extending v2 + rev 1. Clean break again: the `events.op` CHECK now admits `move` and `compact`; delete the store file to recreate (no migration).
+
+### Move (reorder)
+
+`todo {action: 'move', id, pos}` reorders the queue. `pos` is 1-based queue position (1 = front); any status may be moved. The event records intent as given; replay renumbers densely around the moved task — a deterministic pure function of the pre-state — so a move can never corrupt or deadlock replay. Call-time validation refuses out-of-range positions loudly; replay skips them (never fatal). Moving to the current position is a no-op event. `next` and renders follow the moved order.
+
+### Claim semantics (ownership)
+
+Every event records the session that caused it (`ctx.sessionManager.getSessionId()`; `anon` when unknown). The claim is derived from the log, never stored: the session of the latest `start` event owns an in_progress task; `complete`/`fail`/`retry` clear it. Enforcement is minimal and deadlock-free:
+
+- `start` on a claimed task refuses and names the claimer.
+- `complete` by a foreign session refuses: `fail it first to take over`.
+- `fail` is free: it records the failure and releases the claim (the reply notes the release). The takeover path is `fail` -> `retry` -> `start`.
+- Anonymous sessions cannot claim-lock each other; cross-process semantics remain last-writer-wins but are now attributable and race-detectable per event.
+
+### Event log compaction
+
+A mutation that pushes the event count past `COMPACT_THRESHOLD_EVENTS` (1000) first appends a full-state `compact` snapshot event, rewrites the projection's seq anchors to the snapshot's epoch, then deletes the older log. Replay applies the snapshot as initial state and continues; the exact queue state is always reconstructable. Reads never append, so they never trigger compaction.
+
+Trade-offs, documented:
+
+- Compaction destroys per-event history; the audit spine becomes the latest snapshot plus the events since.
+- Staleness epochs reset at each compaction: the unresolved footer dates from the checkpoint, not the true last touch.
+- A malformed compact snapshot reads as an empty queue (replay never throws).
 
 ## Compatibility
 

@@ -1,6 +1,6 @@
 # SPEC: rem v1 — a memory tool for the pi harness
 
-Status: proposal, amended per review, pending final approval. Implementation target: extensions/rem.ts + extensions/**tests**/rem.test.mjs, TDD. Design draws on the concepts in ~/Projects/lift/cmd/rem (recall fusion, consolidation arithmetic, idempotent writes), translated to SQLite and trimmed to a native pi tool.
+Status: implemented (TDD). Implementation: extensions/rem.ts + extensions/**tests**/rem.test.mjs, on the shared extensions/sqlite.ts lifecycle. Design draws on the concepts in ~/Projects/lift/cmd/rem (recall fusion, consolidation arithmetic, idempotent writes), translated to SQLite and trimmed to a native pi tool.
 
 ## Problem
 
@@ -27,9 +27,9 @@ Portability: FTS5 is compiled in on mainstream Node builds, but not guaranteed o
 
 ## Design
 
-### A. Shared sqlite.ts — pending, not shipped
+### A. Shared sqlite.ts — shipped
 
-todo.ts and rem.ts need identical fail-closed machinery (open-with-integrity-check, recreate-on-corruption, WAL checkpoint + close, serialized access queue). This version ships with todo.ts untouched and rem.ts self-contained: rem carries its own `openStore`/`withLog`/`withStore` copies, mirroring todo's patterns. The `extensions/sqlite.ts` extraction remains a follow-up refactor; it must parameterize the corruption policy, because the two stores diverge deliberately: todo deletes a corrupt queue (short-lived), rem quarantines it (memories are irreplaceable evidence). That divergence is a documented parameter, not drift.
+todo.ts and rem.ts now share the fail-closed machinery in `extensions/sqlite.ts`: open-with-integrity-check, dispose-on-corruption, WAL checkpoint + close, serialized access queue, and the transaction wrapper. The corruption policy is a parameter, because the two stores diverge deliberately: todo deletes a corrupt queue (short-lived), rem quarantines it (memories are irreplaceable evidence). That divergence is a documented parameter, not drift.
 
 ### B. Store topology — hybrid, single file
 
@@ -157,7 +157,7 @@ Reply details carry `{ action, memories }` so the model sees structured records;
 
 **in:** the four operations, two-arm recall, scope model (global + project hybrid), effective-strength arithmetic with checkpointed consolidate, supersession with SET NULL, corruption quarantine, FTS availability gate with fuzzy-only fallback, automatic session_compact reflection, behavioral suite on the real store, package.json registration, README mention.
 
-**out:** shared sqlite.ts extraction (follow-up refactor, unifies todo + rem on the same lifecycle), embeddings/vector search, associations/graph recall, episodes, multi-user, automatic source indexing, migrations beyond CREATE IF NOT EXISTS.
+**out:** ~~shared sqlite.ts extraction~~ (shipped), embeddings/vector search, associations/graph recall, episodes, multi-user, automatic source indexing, migrations beyond CREATE IF NOT EXISTS.
 
 ## Acceptance (failure-mode-first tests)
 

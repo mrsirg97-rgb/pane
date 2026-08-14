@@ -1,6 +1,6 @@
 # SPEC: todo rev 1 — dependsOn task trees
 
-Status: proposal, pending review. Implementation target: extensions/todo.ts + extensions/**tests**/todo.test.mjs, TDD. This closes the gap SPEC.md v2 explicitly deferred: "Dependencies (dependsOn), priorities, due dates, estimates. next stays 'first pending'. Schema creep rejected."
+Status: implemented (TDD). Implementation: extensions/todo.ts + extensions/**tests**/todo.test.mjs. This closes the gap SPEC.md v2 explicitly deferred: "Dependencies (dependsOn), priorities, due dates, estimates. next stays 'first pending'. Schema creep rejected."
 
 ## Problem
 
