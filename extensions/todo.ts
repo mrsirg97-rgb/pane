@@ -16,7 +16,14 @@ const DIR = join(homedir(), ".pi/agent/todos");
 export const STALE_THRESHOLD_SEQ = 200;
 
 type Status = "pending" | "in_progress" | "done" | "failed";
-type Task = { id: string; text: string; status: Status };
+type Task = {
+  id: string;
+  text: string;
+  status: Status;
+  dependsOn: string | null;
+};
+/** Render/reply shape: blockedBy is derived at reply time, never stored. */
+type TaskView = Task & { blockedBy: string | null };
 type StoredTask = Task & {
   pos: number;
   created_seq: number;
@@ -54,6 +61,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
   text TEXT NOT NULL UNIQUE,
   status TEXT NOT NULL CHECK (status IN ('pending', 'in_progress', 'done', 'failed')),
+  depends_on TEXT,
   pos INTEGER NOT NULL,
   created_seq INTEGER NOT NULL REFERENCES events(seq),
   updated_seq INTEGER NOT NULL REFERENCES events(seq)
@@ -110,10 +118,13 @@ function replay(db: DatabaseSync): Map<string, StoredTask> {
     args: string;
   }[];
   for (const ev of events) {
-    let args: { tasks?: { text?: unknown }[]; id?: string } = {};
+    let args: {
+      tasks?: { text?: unknown; dependsOn?: unknown }[];
+      id?: string;
+    } = {};
     try {
       args = JSON.parse(ev.args) as {
-        tasks?: { text?: unknown }[];
+        tasks?: { text?: unknown; dependsOn?: unknown }[];
         id?: string;
       };
     } catch {
@@ -126,12 +137,142 @@ function replay(db: DatabaseSync): Map<string, StoredTask> {
 
 type Op = "create" | "start" | "complete" | "fail" | "retry";
 
+type PlannedRow = {
+  text: string;
+  id: string;
+  pos: number;
+  dependsOn: string | null | undefined; // undefined: keep an existing link
+};
+type Plan = { rows: PlannedRow[]; problems: string[] };
+
+/** Pure. Dedup by text (first occurrence wins), mint ids/positions, resolve dependsOn
+ *  (id first, then exact text) against existing tasks plus the batch itself. Never mutates. */
+function planCreate(
+  map: Map<string, StoredTask>,
+  incoming: { text?: unknown; dependsOn?: unknown }[],
+): Plan {
+  const items = incoming.map((raw) => ({
+    text: String(raw?.text ?? ""),
+    dependsOn:
+      typeof raw?.dependsOn === "string"
+        ? (raw.dependsOn as string)
+        : raw?.dependsOn === null
+          ? null
+          : undefined,
+  }));
+  let maxId = 0;
+  let maxPos = -1;
+  for (const t of map.values()) {
+    const m = /^t(\d+)$/.exec(t.id);
+    if (m) maxId = Math.max(maxId, Number(m[1]));
+    maxPos = Math.max(maxPos, t.pos);
+  }
+  const rows: PlannedRow[] = [];
+  const seen = new Set<string>();
+  const textIds = new Map<string, string>(); // text -> id, existing then planned
+  for (const t of map.values()) textIds.set(t.text, t.id);
+  for (const inc of items) {
+    if (seen.has(inc.text)) continue; // first occurrence wins
+    seen.add(inc.text);
+    let id = textIds.get(inc.text);
+    if (!id) {
+      id = `t${++maxId}`;
+      maxPos++;
+      textIds.set(inc.text, id);
+    }
+    rows.push({ text: inc.text, id, pos: maxPos, dependsOn: inc.dependsOn });
+  }
+  const problems: string[] = [];
+  const ids = new Set<string>(); // existing ids only; batch-internal refs are textual
+  for (const t of map.values()) ids.add(t.id);
+  for (const row of rows) {
+    const d = row.dependsOn;
+    if (typeof d !== "string") continue;
+    const resolved = ids.has(d) ? d : textIds.get(d);
+    if (resolved) {
+      if (resolved === row.id)
+        problems.push(`'${row.text}' cannot depend on itself`);
+      row.dependsOn = resolved;
+    } else {
+      problems.push(`dependsOn '${d}' not found`);
+      row.dependsOn = null;
+    }
+  }
+  return { rows, problems };
+}
+
+/** Apply a planned create to the projection. Deterministic; links whose target is
+ *  missing are dropped (replay resilience), never fatal. */
+function applyCreate(map: Map<string, StoredTask>, seq: number, plan: Plan) {
+  for (const row of plan.rows) {
+    if (map.has(row.id)) continue; // existing: link handled in pass 2
+    map.set(row.id, {
+      id: row.id,
+      text: row.text,
+      status: "pending",
+      dependsOn: row.dependsOn === undefined ? null : row.dependsOn,
+      pos: row.pos,
+      created_seq: seq,
+      updated_seq: seq,
+    });
+  }
+  for (const row of plan.rows) {
+    const d = row.dependsOn;
+    if (d === undefined) continue; // keep an existing link
+    const t = map.get(row.id);
+    if (!t) continue;
+    t.dependsOn = map.has(d) ? d : null;
+    t.updated_seq = seq;
+  }
+}
+
+/** DFS cycle path over the existing graph plus the planned batch, or null. */
+function cycleProblem(
+  map: Map<string, StoredTask>,
+  plan: Plan,
+): string[] | null {
+  const next = new Map<string, string>(); // id -> dependency id
+  for (const t of map.values()) {
+    if (t.dependsOn) next.set(t.id, t.dependsOn);
+  }
+  for (const row of plan.rows) {
+    if (row.dependsOn) next.set(row.id, row.dependsOn);
+    else if (row.dependsOn === null && map.has(row.id)) next.delete(row.id);
+  }
+  const color = new Map<string, 1 | 2>(); // 1 visiting, 2 done
+  const path: string[] = [];
+  const visit = (id: string): string[] | null => {
+    const c = color.get(id);
+    if (c === 2) return null;
+    if (c === 1) return path.slice(path.indexOf(id)).concat(id); // back edge
+    color.set(id, 1);
+    path.push(id);
+    const dep = next.get(id);
+    const cycle = dep ? visit(dep) : null;
+    path.pop();
+    color.set(id, 2);
+    return cycle;
+  };
+  for (const id of next.keys()) {
+    const cycle = visit(id);
+    if (cycle) return cycle;
+  }
+  return null;
+}
+
+/** Refuse the batch on any dependency problem: unknown target, self, or cycle. */
+function validateDeps(map: Map<string, StoredTask>, plan: Plan): void {
+  if (plan.problems.length) fail(plan.problems[0]);
+  const cycle = cycleProblem(map, plan);
+  if (cycle) fail(`dependencies would form a cycle: ${cycle.join(" -> ")}`);
+}
+
 /** Apply one event to the projection. Deterministic; inapplicable transitions are no-ops. */
 function applyEvent(
   map: Map<string, StoredTask>,
   seq: number,
   op: Op,
-  args: { tasks?: { text?: unknown }[]; id?: string },
+  args: { tasks?: { text?: unknown; dependsOn?: unknown }[]; id?: string },
 ) {
   if (op === "create") {
     const incoming = args.tasks ?? [];
@@ -139,28 +280,7 @@ function applyEvent(
       map.clear();
       return;
     }
-    let maxId = 0;
-    let maxPos = -1;
-    for (const t of map.values()) {
-      const m = /^t(\d+)$/.exec(t.id);
-      if (m) maxId = Math.max(maxId, Number(m[1]));
-      maxPos = Math.max(maxPos, t.pos);
-    }
-    for (const inc of incoming) {
-      const text = String(inc?.text ?? "");
-      const existing = [...map.values()].find((t) => t.text === text);
-      if (existing) continue; // upsert: keep id, status, position
-      const id = `t${++maxId}`;
-      maxPos++;
-      map.set(id, {
-        id,
-        text,
-        status: "pending",
-        pos: maxPos,
-        created_seq: seq,
-        updated_seq: seq,
-      });
-    }
+    applyCreate(map, seq, planCreate(map, incoming));
     return;
   }
 
@@ -186,13 +306,21 @@ function applyEvent(
 function persist(db: DatabaseSync, map: Map<string, StoredTask>) {
   db.exec("DELETE FROM tasks");
   const insert = db.prepare(
-    "INSERT INTO tasks (id, text, status, pos, created_seq, updated_seq) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT INTO tasks (id, text, status, depends_on, pos, created_seq, updated_seq) VALUES (?, ?, ?, ?, ?, ?, ?)",
   );
   const ordered = [...map.values()].sort(
     (a, b) => a.pos - b.pos || a.created_seq - b.created_seq,
   );
   for (const t of ordered) {
-    insert.run(t.id, t.text, t.status, t.pos, t.created_seq, t.updated_seq);
+    insert.run(
+      t.id,
+      t.text,
+      t.status,
+      t.dependsOn,
+      t.pos,
+      t.created_seq,
+      t.updated_seq,
+    );
   }
 }
 
@@ -218,20 +346,20 @@ function staleFooter(db: DatabaseSync): string | null {
   return `· ${rows.length} unresolved since ${latestTs.slice(0, 10)} (recovered from log)`;
 }
 
-function maxIdNum(tasks: Iterable<StoredTask>): number {
-  let max = 0;
-  for (const t of tasks) {
-    const m = /^t(\d+)$/.exec(t.id);
-    if (m) max = Math.max(max, Number(m[1]));
-  }
-  return max;
-}
-
 function find(
   map: Map<string, StoredTask>,
   id: string,
 ): StoredTask | undefined {
   return map.get(id);
+}
+
+/** The dependency id that blocks this pending/in_progress task, or null. */
+function blockedBy(map: Map<string, StoredTask>, t: StoredTask): string | null {
+  if (t.status !== "pending" && t.status !== "in_progress") return null;
+  const d = t.dependsOn;
+  if (!d) return null;
+  const dep = map.get(d);
+  return dep && dep.status !== "done" ? d : null;
 }
 
 function fail(message: string): never {
@@ -258,10 +386,10 @@ const TASK_GLYPH: Record<Status, [string, string]> = {
   failed: ["✕", "error"],
 };
 
-function renderQueue(theme: any, tasks: Task[]): string {
+function renderQueue(theme: any, tasks: TaskView[]): string {
   if (!tasks.length) return theme.fg("dim", "(no tasks)");
   const done = tasks.filter((t) => t.status === "done").length;
-  const next = tasks.find((t) => t.status === "pending");
+  const next = tasks.find((t) => t.status === "pending" && !t.blockedBy);
   const head =
     `${progressBar(theme, done, tasks.length)} ` +
     theme.fg(
@@ -279,17 +407,24 @@ function renderQueue(theme: any, tasks: Task[]): string {
       t.status === "done"
         ? theme.fg("dim", t.text)
         : theme.fg(t.status === "failed" ? "error" : "text", t.text);
-    return `${theme.fg(color, glyph)} ${theme.fg("dim", t.id)} ${text}`;
+    const waits = t.blockedBy
+      ? theme.fg("dim", ` · waits on ${t.blockedBy}`)
+      : "";
+    return `${theme.fg(color, glyph)} ${theme.fg("dim", t.id)} ${text}${waits}`;
   });
   return [head, ...rows].join("\n");
 }
 
-function render(tasks: Task[]): string {
+function render(tasks: TaskView[]): string {
   if (!tasks.length) return "(no tasks)";
   const done = tasks.filter((t) => t.status === "done").length;
   const failed = tasks.filter((t) => t.status === "failed").length;
-  const next = tasks.find((t) => t.status === "pending");
-  const lines = tasks.map((t) => `  ${t.id} ${MARK[t.status]} ${t.text}`);
+  const next = tasks.find((t) => t.status === "pending" && !t.blockedBy);
+  const lines = tasks.map(
+    (t) =>
+      `  ${t.id} ${MARK[t.status]} ${t.text}` +
+      (t.blockedBy ? ` · waits on ${t.blockedBy}` : ""),
+  );
   const head =
     `${done}/${tasks.length} done` +
     (next ? ` · next: ${next.id}` : "") +
@@ -305,6 +440,8 @@ export default function todoExtension(pi: ExtensionAPI) {
       "Task queue per working directory. action REQUIRED. create replaces the queue (tasks: [{text}]); " +
       "start/complete/fail/retry transition one task by id; read prints it. " +
       "pending -> in_progress -> done (read-only) or failed; failed -> retry -> pending. " +
+      "create may link tasks into a tree: tasks[].dependsOn (task id or exact text; null clears a link); " +
+      "a task is blocked until its dependency is done; cycles are refused; next skips blocked tasks. " +
       "several tasks may be in flight; batched transitions apply in order, each against fresh state. " +
       "every mutation returns the full queue. ids are minted by the tool; copy, never invent.",
     promptSnippet: "Track and update a task queue for multi-step work",
@@ -313,6 +450,7 @@ export default function todoExtension(pi: ExtensionAPI) {
       "work grew past 3 steps mid-task -> stop, create the queue, continue.",
       "concurrent work -> several in flight is fine; batch transitions when several finish together.",
       "done is read-only; failed -> retry before start. single-step task -> skip todo.",
+      "dependencies: dependsOn at create (task id or exact text; null clears); complete blocked tasks only after their dependency is done; next skips blocked.",
     ],
     parameters: Type.Object({
       action: ACTION,
@@ -320,6 +458,15 @@ export default function todoExtension(pi: ExtensionAPI) {
         Type.Array(
           Type.Object({
             text: Type.String({ description: "What needs doing" }),
+            dependsOn: Type.Optional(
+              Type.Union([
+                Type.String({
+                  description:
+                    "Task id (tN) or exact text this task depends on; null clears the link",
+                }),
+                Type.Null(),
+              ]),
+            ),
           }),
           {
             description:
@@ -347,7 +494,7 @@ export default function todoExtension(pi: ExtensionAPI) {
     renderResult(result, _options, theme, _ctx) {
       if (result.isError) return errorText(theme, result);
       const tasks =
-        (result.details as { tasks?: Task[] } | undefined)?.tasks ?? [];
+        (result.details as { tasks?: TaskView[] } | undefined)?.tasks ?? [];
       return new Text(indent(renderQueue(theme, tasks)), 0, 0);
     },
     prepareArguments(args) {
@@ -373,10 +520,12 @@ export default function todoExtension(pi: ExtensionAPI) {
             const ordered = [...map.values()].sort(
               (a, b) => a.pos - b.pos || a.created_seq - b.created_seq,
             );
-            const tasks: Task[] = ordered.map((t) => ({
+            const tasks: TaskView[] = ordered.map((t) => ({
               id: t.id,
               text: t.text,
               status: t.status,
+              dependsOn: t.dependsOn,
+              blockedBy: blockedBy(map, t),
             }));
             const footer = staleFooter(db);
             const text = [note && `→ ${note}`, render(tasks), footer]
@@ -398,6 +547,8 @@ export default function todoExtension(pi: ExtensionAPI) {
             const incoming =
               params.tasks ??
               fail("action 'create' requires tasks: array of {text}");
+            const plan = planCreate(map, incoming);
+            validateDeps(map, plan);
             const append = db
               .prepare(
                 "INSERT INTO events (op, args, session) VALUES ('create', ?, NULL)",
@@ -438,6 +589,17 @@ export default function todoExtension(pi: ExtensionAPI) {
               fail(`'${id}' is pending; start it first`);
             if (t.status === "done") fail(`'${id}' is done; read-only`);
             if (t.status === "failed") fail(`'${id}' failed; retry it first`);
+            const depId = t.dependsOn;
+            const blocker = depId ? find(map, depId) : undefined;
+            if (blocker && blocker.status !== "done") {
+              const hint =
+                blocker.status === "pending"
+                  ? "pending; start it first"
+                  : blocker.status === "failed"
+                    ? "failed; retry it first"
+                    : "in_progress";
+              fail(`'${id}' is blocked by '${depId}' (${hint})`);
+            }
             const append = db
               .prepare(
                 "INSERT INTO events (op, args, session) VALUES ('complete', ?, NULL)",

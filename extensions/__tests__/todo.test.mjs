@@ -55,7 +55,7 @@ function projRows(dir) {
   try {
     const rows = db
       .prepare(
-        "SELECT id, text, status, pos, created_seq, updated_seq FROM tasks ORDER BY pos, created_seq",
+        "SELECT id, text, status, depends_on, pos, created_seq, updated_seq FROM tasks ORDER BY pos, created_seq",
       )
       .all();
     return rows.map((r) => ({ ...r }));
@@ -501,4 +501,468 @@ test("concurrent start + complete keep the documented order (complete waits)", a
   assert.equal(completed.isError, undefined);
   const r = await tool.execute("t58", { action: "read" });
   assert.match(textOf(r), /\[x\] ordered/);
+});
+
+// ---- dependsOn: schema ----
+test("dependsOn schema: id/text/null/omitted accepted; non-string rejected", () => {
+  assert.equal(
+    checkSchema({ action: "create", tasks: [{ text: "a", dependsOn: "t1" }] }),
+    true,
+  );
+  assert.equal(
+    checkSchema({ action: "create", tasks: [{ text: "a", dependsOn: "A" }] }),
+    true,
+  );
+  assert.equal(
+    checkSchema({ action: "create", tasks: [{ text: "a", dependsOn: null }] }),
+    true,
+  );
+  assert.equal(checkSchema({ action: "create", tasks: [{ text: "a" }] }), true);
+  assert.equal(
+    checkSchema({ action: "create", tasks: [{ text: "a", dependsOn: 1 }] }),
+    false,
+  );
+});
+
+// ---- dependsOn: tree creation ----
+test("same-batch chain creates a task tree; depends_on persisted", async () => {
+  const cwd = join(scratch, "ws8");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const r = await tool.execute("t60", {
+    action: "create",
+    tasks: [
+      { text: "root" },
+      { text: "mid", dependsOn: "root" },
+      { text: "leaf", dependsOn: "mid" },
+    ],
+  });
+  assert.equal(r.isError, undefined);
+  const store = projRows(cwd);
+  const root = store.find((t) => t.text === "root");
+  const mid = store.find((t) => t.text === "mid");
+  const leaf = store.find((t) => t.text === "leaf");
+  assert.equal(root.depends_on, null);
+  assert.equal(mid.depends_on, root.id);
+  assert.equal(leaf.depends_on, mid.id);
+});
+
+test("diamond: several tasks may depend on one task", async () => {
+  const cwd = join(scratch, "ws9");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const r = await tool.execute("t61", {
+    action: "create",
+    tasks: [
+      { text: "hub" },
+      { text: "left", dependsOn: "hub" },
+      { text: "right", dependsOn: "hub" },
+    ],
+  });
+  assert.equal(r.isError, undefined);
+  const store = projRows(cwd);
+  const hub = store.find((t) => t.text === "hub");
+  assert.equal(store.find((t) => t.text === "left").depends_on, hub.id);
+  assert.equal(store.find((t) => t.text === "right").depends_on, hub.id);
+});
+
+test("forward references within a batch resolve", async () => {
+  const cwd = join(scratch, "ws16");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const r = await tool.execute("t62", {
+    action: "create",
+    tasks: [{ text: "later", dependsOn: "first" }, { text: "first" }],
+  });
+  assert.equal(r.isError, undefined);
+  const store = projRows(cwd);
+  const first = store.find((t) => t.text === "first");
+  assert.equal(store.find((t) => t.text === "later").depends_on, first.id);
+});
+
+test("id-based reference to an existing task", async () => {
+  const cwd = join(scratch, "ws17");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const created = await tool.execute("t63", {
+    action: "create",
+    tasks: [{ text: "alpha" }],
+  });
+  const id = idOf("alpha", textOf(created));
+  const r = await tool.execute("t64", {
+    action: "create",
+    tasks: [{ text: "beta", dependsOn: id }],
+  });
+  assert.equal(r.isError, undefined);
+  const store = projRows(cwd);
+  assert.equal(store.find((t) => t.text === "beta").depends_on, id);
+});
+
+test("id match wins over text match", async () => {
+  const cwd = join(scratch, "ws18");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await tool.execute("t65", {
+    action: "create",
+    tasks: [{ text: "a" }, { text: "b" }],
+  }); // a=t1, b=t2
+  await tool.execute("t66", { action: "create", tasks: [{ text: "t1" }] }); // the t1-text task mints t3
+  const r = await tool.execute("t67", {
+    action: "create",
+    tasks: [{ text: "c", dependsOn: "t1" }],
+  }); // c=t4
+  assert.equal(r.isError, undefined);
+  const store = projRows(cwd);
+  assert.equal(store.find((t) => t.text === "t1").id, "t3");
+  assert.equal(store.find((t) => t.text === "c").depends_on, "t1"); // id match, never the t1-text task
+});
+
+test("a minted id does not shadow a matching text", async () => {
+  const cwd = join(scratch, "ws19");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await tool.execute("t68", {
+    action: "create",
+    tasks: [{ text: "x" }, { text: "t3" }],
+  }); // x=t1, t3-text=t2
+  const r = await tool.execute("t69", {
+    action: "create",
+    tasks: [{ text: "beta", dependsOn: "t3" }],
+  }); // beta mints t3
+  const store = projRows(cwd);
+  assert.equal(store.find((t) => t.text === "beta").id, "t3");
+  assert.equal(store.find((t) => t.text === "beta").depends_on, "t2"); // text match, not a phantom self
+});
+
+// ---- dependsOn: validation ----
+test("unknown dependency target refuses loudly; batch rejected atomically", async () => {
+  const cwd = join(scratch, "ws10");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await tool.execute("t0", { action: "read" }); // bootstrap the schema before counting events
+  const before = eventRows(cwd).length;
+  await assert.rejects(
+    () =>
+      tool.execute("t69", {
+        action: "create",
+        tasks: [{ text: "a" }, { text: "b", dependsOn: "nope" }],
+      }),
+    /dependsOn 'nope' not found/,
+  );
+  assert.equal(projRows(cwd).length, 0); // nothing created
+  assert.equal(eventRows(cwd).length, before); // no event appended
+});
+
+test("self-dependency refuses loudly", async () => {
+  const cwd = join(scratch, "ws10");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await assert.rejects(
+    () =>
+      tool.execute("t70", {
+        action: "create",
+        tasks: [{ text: "solo", dependsOn: "solo" }],
+      }),
+    /cannot depend on itself/,
+  );
+});
+
+test("cycles refuse with the cycle path; batch rejected", async () => {
+  const cwd = join(scratch, "ws10");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await tool.execute("t0", { action: "read" }); // bootstrap the schema before counting events
+  const before = eventRows(cwd).length;
+  await assert.rejects(
+    () =>
+      tool.execute("t71", {
+        action: "create",
+        tasks: [
+          { text: "a", dependsOn: "b" },
+          { text: "b", dependsOn: "a" },
+        ],
+      }),
+    /dependencies would form a cycle: t1 -> t2 -> t1/,
+  );
+  assert.equal(eventRows(cwd).length, before);
+});
+
+test("three-node cycle refuses", async () => {
+  const cwd = join(scratch, "ws10");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await assert.rejects(
+    () =>
+      tool.execute("t72", {
+        action: "create",
+        tasks: [
+          { text: "a", dependsOn: "b" },
+          { text: "b", dependsOn: "c" },
+          { text: "c", dependsOn: "a" },
+        ],
+      }),
+    /dependencies would form a cycle: t1 -> t2 -> t3 -> t1/,
+  );
+});
+
+test("a recreate cannot push an existing acyclic queue into a cycle", async () => {
+  const cwd = join(scratch, "ws10");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await tool.execute("t73", {
+    action: "create",
+    tasks: [{ text: "c" }, { text: "d" }],
+  });
+  await assert.rejects(
+    () =>
+      tool.execute("t74", {
+        action: "create",
+        tasks: [
+          { text: "c", dependsOn: "d" },
+          { text: "d", dependsOn: "c" },
+        ],
+      }),
+    /form a cycle/,
+  );
+  const store = projRows(cwd);
+  assert.equal(store.find((t) => t.text === "c").depends_on, null);
+  assert.equal(store.find((t) => t.text === "d").depends_on, null);
+});
+
+// ---- dependsOn: upsert semantics ----
+test("recreate with dependsOn omitted keeps the link", async () => {
+  const cwd = join(scratch, "ws11");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await tool.execute("t75", {
+    action: "create",
+    tasks: [{ text: "p" }, { text: "q", dependsOn: "p" }],
+  });
+  await tool.execute("t76", { action: "create", tasks: [{ text: "q" }] });
+  const store = projRows(cwd);
+  const p = store.find((t) => t.text === "p");
+  assert.equal(store.find((t) => t.text === "q").depends_on, p.id);
+});
+
+test("recreate with dependsOn provided updates the link", async () => {
+  const cwd = join(scratch, "ws11");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await tool.execute("t77", { action: "create", tasks: [{ text: "r" }] });
+  await tool.execute("t78", {
+    action: "create",
+    tasks: [{ text: "q", dependsOn: "r" }],
+  });
+  const store = projRows(cwd);
+  const r = store.find((t) => t.text === "r");
+  assert.equal(store.find((t) => t.text === "q").depends_on, r.id);
+});
+
+test("recreate with dependsOn null clears the link", async () => {
+  const cwd = join(scratch, "ws11");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await tool.execute("t79", {
+    action: "create",
+    tasks: [{ text: "q", dependsOn: null }],
+  });
+  const store = projRows(cwd);
+  assert.equal(store.find((t) => t.text === "q").depends_on, null);
+});
+
+test("first occurrence wins within a batch", async () => {
+  const cwd = join(scratch, "ws11");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await tool.execute("t80", {
+    action: "create",
+    tasks: [{ text: "f", dependsOn: "p" }, { text: "f" }],
+  });
+  const store = projRows(cwd);
+  assert.equal(
+    store.find((t) => t.text === "f").depends_on,
+    store.find((t) => t.text === "p").id,
+  );
+});
+
+// ---- dependsOn: completion gating ----
+test("complete on a blocked task refuses with the blocker and its status", async () => {
+  const cwd = join(scratch, "ws12");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const r = await tool.execute("t81", {
+    action: "create",
+    tasks: [{ text: "gate" }, { text: "work", dependsOn: "gate" }],
+  });
+  const gate = idOf("gate", textOf(r));
+  const work = idOf("work", textOf(r));
+  await tool.execute("t82", { action: "start", id: work });
+  await assert.rejects(
+    () => tool.execute("t83", { action: "complete", id: work }),
+    new RegExp(`is blocked by '${gate}' \\(pending; start it first\\)`),
+  );
+  await tool.execute("t84", { action: "start", id: gate });
+  await assert.rejects(
+    () => tool.execute("t85", { action: "complete", id: work }),
+    new RegExp(`is blocked by '${gate}' \\(in_progress\\)`),
+  );
+  await tool.execute("t86", { action: "fail", id: gate });
+  await assert.rejects(
+    () => tool.execute("t87", { action: "complete", id: work }),
+    new RegExp(`is blocked by '${gate}' \\(failed; retry it first\\)`),
+  );
+  // retry -> start -> complete unblocks the dependent
+  await tool.execute("t88", { action: "retry", id: gate });
+  await tool.execute("t89", { action: "start", id: gate });
+  await tool.execute("t90", { action: "complete", id: gate });
+  const done = await tool.execute("t91", { action: "complete", id: work });
+  assert.match(textOf(done), /\[x\] work/);
+});
+
+test("start on a blocked task is legal", async () => {
+  const cwd = join(scratch, "ws12b");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const r = await tool.execute("t92", {
+    action: "create",
+    tasks: [{ text: "prereq" }, { text: "later", dependsOn: "prereq" }],
+  });
+  const later = idOf("later", textOf(r));
+  const s = await tool.execute("t93", { action: "start", id: later });
+  assert.equal(s.isError, undefined);
+  assert.match(textOf(s), /\[~\] later/);
+});
+
+// ---- dependsOn: presence ----
+test("next skips blocked tasks; blocked rows carry a waits-on suffix", async () => {
+  const cwd = join(scratch, "ws13");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const r = await tool.execute("t94", {
+    action: "create",
+    tasks: [
+      { text: "dep-a" },
+      { text: "dep-b" },
+      { text: "leaf", dependsOn: "dep-b" },
+      { text: "free" },
+    ],
+  });
+  const txt = textOf(r);
+  const depB = idOf("dep-b", txt);
+  assert.match(txt, new RegExp(`waits on ${depB}`));
+  assert.match(txt, /next: t1/); // dep-a, never the blocked leaf
+});
+
+test("a queue whose only pending task is blocked shows no next", async () => {
+  const cwd = join(scratch, "ws13c");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const r = await tool.execute("t96", {
+    action: "create",
+    tasks: [{ text: "prereq" }, { text: "dependent", dependsOn: "prereq" }],
+  });
+  const prereq = idOf("prereq", textOf(r));
+  await tool.execute("t97", { action: "start", id: prereq });
+  await tool.execute("t98", { action: "fail", id: prereq });
+  const read = await tool.execute("t99", { action: "read" });
+  assert.doesNotMatch(textOf(read), /· next:/);
+  assert.match(textOf(read), /waits on /);
+});
+
+test("details carry dependsOn and blockedBy", async () => {
+  const cwd = join(scratch, "ws13");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const r = await tool.execute("t100", { action: "read" });
+  const details = r.details;
+  assert.ok(details);
+  const leaf = details.tasks.find((t) => t.text === "leaf");
+  const depB = details.tasks.find((t) => t.text === "dep-b");
+  const free = details.tasks.find((t) => t.text === "free");
+  assert.equal(leaf.dependsOn, depB.id);
+  assert.equal(leaf.blockedBy, depB.id);
+  assert.equal(depB.blockedBy, null);
+  assert.equal(free.dependsOn, null);
+  assert.equal(free.blockedBy, null);
+});
+
+test("done tasks never report a blocker", async () => {
+  const cwd = join(scratch, "ws13d");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const r = await tool.execute("t101", {
+    action: "create",
+    tasks: [{ text: "first" }, { text: "second", dependsOn: "first" }],
+  });
+  const first = idOf("first", textOf(r));
+  const second = idOf("second", textOf(r));
+  await tool.execute("t102", { action: "start", id: first });
+  await tool.execute("t103", { action: "complete", id: first });
+  await tool.execute("t104", { action: "start", id: second });
+  const c = await tool.execute("t105", { action: "complete", id: second });
+  assert.doesNotMatch(textOf(c), /waits on/);
+  assert.equal(
+    c.details.tasks.find((t) => t.text === "second").blockedBy,
+    null,
+  );
+});
+
+// ---- dependsOn: replay integrity ----
+test("dependency survives projection tamper (rebuilt from events)", async () => {
+  const cwd = join(scratch, "ws14");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const r = await tool.execute("t106", {
+    action: "create",
+    tasks: [{ text: "a" }, { text: "b", dependsOn: "a" }],
+  });
+  const aId = idOf("a", textOf(r));
+  const db = openDb(cwd);
+  db.prepare("UPDATE tasks SET depends_on = NULL").run();
+  db.close();
+  await tool.execute("t107", { action: "read" });
+  const store = projRows(cwd);
+  assert.equal(store.find((t) => t.text === "b").depends_on, aId);
+});
+
+test("dangling dependency from a corrupt create event drops on replay", async () => {
+  const cwd = join(scratch, "ws14");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const db = openDb(cwd);
+  const ev = db
+    .prepare(
+      "SELECT seq FROM events WHERE op = 'create' ORDER BY seq DESC LIMIT 1",
+    )
+    .get();
+  db.prepare("UPDATE events SET args = ? WHERE seq = ?").run(
+    JSON.stringify({
+      tasks: [{ text: "a" }, { text: "b", dependsOn: "ghost" }],
+    }),
+    ev.seq,
+  );
+  db.close();
+  const read = await tool.execute("t108", { action: "read" });
+  const store = projRows(cwd);
+  assert.equal(store.find((t) => t.text === "b").depends_on, null);
+  const bId = idOf("b", textOf(read));
+  await tool.execute("t109", { action: "start", id: bId });
+  const c = await tool.execute("t110", { action: "complete", id: bId });
+  assert.equal(c.isError, undefined); // not deadlocked by the ghost
+});
+
+// ---- dependsOn: event log ----
+test("create event args carry dependsOn as given", async () => {
+  const cwd = join(scratch, "ws15");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await tool.execute("t111", {
+    action: "create",
+    tasks: [{ text: "dep", dependsOn: "other" }, { text: "other" }],
+  });
+  const rows = eventRows(cwd);
+  const create = rows.find((r) => r.op === "create");
+  const tasks = JSON.parse(create.args).tasks;
+  assert.equal(tasks[0].dependsOn, "other"); // raw input, not a resolved id
+  assert.equal("dependsOn" in tasks[1], false); // omitted for the plain task
 });
