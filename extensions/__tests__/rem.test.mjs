@@ -529,7 +529,7 @@ test("prune verb is schema-optional; missing fails at execute (loud)", async () 
   assert.equal(checkSchema({ action: "prune" }), true);
   await assert.rejects(
     () => tool.execute("t70", { action: "prune" }),
-    /prune requires verb remove|reduce|consolidate/,
+    /prune requires verb remove\|reduce\|consolidate/,
   );
 });
 
@@ -609,6 +609,65 @@ test("prune remove by criteria: older_than_days and kind and scope", async () =>
   });
   assert.match(textOf(r2), /removed 0/); // young survives
   assert.ok(memRows().find((r) => r.content === "young victim"));
+});
+
+test("prune remove counts actual deletions; missing ids report zero", async () => {
+  use(cwd1);
+  const r = await tool.execute("t83a", {
+    action: "prune",
+    verb: "remove",
+    ids: [999999],
+  });
+  assert.match(textOf(r), /removed 0/);
+});
+
+test("prune consolidate honors a selection; no selection means the whole store", async () => {
+  use(cwd1);
+  await tool.execute("t83b", { action: "learn", content: "narrow victim" });
+  const victim = memRows().find((r) => r.content === "narrow victim");
+  const db = openDb();
+  db.prepare("UPDATE memories SET last_consolidated_at = ? WHERE id = ?").run(
+    new Date(Date.now() - 40 * 86400000).toISOString(),
+    victim.id,
+  );
+  db.close();
+  await tool.execute("t83c", { action: "learn", content: "narrow bystander" });
+  const bystander = memRows().find((r) => r.content === "narrow bystander");
+  const before = bystander.last_consolidated_at;
+  const r = await tool.execute("t83d", {
+    action: "prune",
+    verb: "consolidate",
+    ids: [victim.id],
+  });
+  assert.match(textOf(r), /consolidated 1/);
+  const after = memRows().find((r) => r.content === "narrow victim");
+  assert.ok(after.strength < 0.3, "selected memory decays");
+  const kept = memRows().find((r) => r.content === "narrow bystander");
+  assert.equal(kept.strength, 0.5, "unselected memory untouched");
+  assert.equal(kept.last_consolidated_at, before, "checkpoint window untouched");
+});
+
+test("prune remove on a genuinely fts-less store never touches memory_fts", async () => {
+  use(cwd1);
+  const db = openDb();
+  db.exec("DROP TABLE IF EXISTS memory_fts"); // the table never existed on this build
+  db.close();
+  remMod.__setFtsAvailable(false);
+  try {
+    await tool.execute("t83e", { action: "learn", content: "ftsless victim" });
+    const v = memRows().find((r) => r.content === "ftsless victim");
+    const r = await tool.execute("t83f", {
+      action: "prune",
+      verb: "remove",
+      ids: [v.id],
+    });
+    assert.equal(r.isError, undefined);
+    assert.match(textOf(r), /removed 1/);
+    assert.equal(memRows().find((r) => r.content === "ftsless victim"), undefined);
+    assert.equal(gramRows(v.id).length, 0, "trigrams still cleaned");
+  } finally {
+    remMod.__setFtsAvailable(undefined);
+  }
 });
 
 test("prune remove/reduce with no selection refuse loudly", async () => {

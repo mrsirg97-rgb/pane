@@ -790,25 +790,26 @@ export default function remExtension(pi: ExtensionAPI) {
 
           if (action === "prune") {
             const verb = params.verb ?? fail("prune requires verb remove|reduce|consolidate");
-            if (verb === "consolidate") {
-              const consolidated = consolidatePass(db);
-              return {
-                content: [{ type: "text", text: `consolidated ${consolidated} memories` }],
-                details: { action, consolidated },
-              };
-            }
-            const ids = selectIds(db, {
+            const sel = {
               ids: params.ids,
               scope: params.scope,
               kind: params.kind,
               older_than_days: params.older_than_days,
               cwd,
-            });
-            if (verb === "remove") {
-              removeMemories(db, ids);
+            };
+            if (verb === "consolidate") {
+              const consolidated = consolidatePass(db, sel);
               return {
-                content: [{ type: "text", text: `removed ${ids.length}` }],
-                details: { action, removed: ids },
+                content: [{ type: "text", text: `consolidated ${consolidated} memories` }],
+                details: { action, consolidated },
+              };
+            }
+            const ids = selectIds(db, sel);
+            if (verb === "remove") {
+              const removed = removeMemories(store, ids);
+              return {
+                content: [{ type: "text", text: `removed ${removed}` }],
+                details: { action, removed },
               };
             }
             const importance = params.importance ?? fail("reduce needs an importance to lower to");
@@ -872,11 +873,44 @@ function applySupersedes(db: DatabaseSync, byId: number, targets: number | numbe
 
 /** The persisted consolidation pass: decay + reinforce + zero the access
  *  counter atomically at the checkpoint. Idempotent: a replay with no
- *  elapsed time and no new accesses leaves strength unchanged. */
-function consolidatePass(db: DatabaseSync): number {
+ *  elapsed time and no new accesses leaves strength unchanged. Honors an
+ *  optional selection (ids or criteria); no selection means the whole
+ *  store, so a scoped request never silently does more than asked. */
+function consolidatePass(
+  db: DatabaseSync,
+  sel: {
+    ids: number[] | undefined;
+    scope: string | undefined;
+    kind: string | undefined;
+    older_than_days: number | undefined;
+    cwd: string;
+  },
+): number {
+  const where: string[] = [];
+  const args: (string | number)[] = [];
+  const ids =
+    Array.isArray(sel.ids) && sel.ids.length ? [...new Set(sel.ids)] : undefined;
+  if (ids) {
+    where.push(`id IN (${ids.map(() => "?").join(",")})`);
+    args.push(...ids);
+  } else if (
+    sel.kind != null ||
+    sel.older_than_days != null ||
+    sel.scope != null
+  ) {
+    const f = filterClause(sel);
+    where.push(...f.clauses);
+    args.push(...f.args);
+  }
   const rows = db
-    .prepare("SELECT id, strength, access_count, importance, last_consolidated_at FROM memories")
-    .all() as Pick<Memory, "id" | "strength" | "access_count" | "importance" | "last_consolidated_at">[];
+    .prepare(
+      `SELECT id, strength, access_count, importance, last_consolidated_at FROM memories` +
+        (where.length ? ` WHERE ${where.join(" AND ")}` : ""),
+    )
+    .all(...args) as Pick<
+    Memory,
+    "id" | "strength" | "access_count" | "importance" | "last_consolidated_at"
+  >[];
   const update = db.prepare(
     "UPDATE memories SET strength = ?, access_count = 0, last_consolidated_at = ? WHERE id = ?",
   );
@@ -891,6 +925,29 @@ function consolidatePass(db: DatabaseSync): number {
     update.run(next, nowIso, row.id);
   }
   return rows.length;
+}
+
+/** Shared scope/kind/age criteria clause for selection queries. */
+function filterClause(sel: {
+  scope: string | undefined;
+  kind: string | undefined;
+  older_than_days: number | undefined;
+  cwd: string;
+}): { clauses: string[]; args: (string | number)[] } {
+  const scopes = readScopes(sel.scope, sel.cwd);
+  const clauses = [`scope IN (${scopes.map(() => "?").join(",")})`];
+  const args: (string | number)[] = [...scopes];
+  if (sel.kind != null) {
+    clauses.push("kind = ?");
+    args.push(sel.kind);
+  }
+  if (sel.older_than_days != null) {
+    clauses.push("created_at < ?");
+    args.push(
+      new Date(Date.now() - sel.older_than_days * 86400000).toISOString(),
+    );
+  }
+  return { clauses, args };
 }
 
 /** Resolve prune selection: ids, or criteria (scope/kind/older_than_days).
@@ -911,36 +968,36 @@ function selectIds(
   if (!hasCriteria) {
     fail("prune needs ids or criteria (kind/older_than_days/scope)");
   }
-  const scopes = readScopes(sel.scope, sel.cwd);
-  const clauses = [`scope IN (${scopes.map(() => "?").join(",")})`];
-  const args: (string | number)[] = [...scopes];
-  if (sel.kind != null) {
-    clauses.push("kind = ?");
-    args.push(sel.kind);
-  }
-  if (sel.older_than_days != null) {
-    clauses.push("created_at < ?");
-    args.push(new Date(Date.now() - sel.older_than_days * 86400000).toISOString());
-  }
+  const f = filterClause(sel);
   const rows = db
-    .prepare(`SELECT id FROM memories WHERE ${clauses.join(" AND ")}`)
-    .all(...args) as { id: number }[];
+    .prepare(`SELECT id FROM memories WHERE ${f.clauses.join(" AND ")}`)
+    .all(...f.args) as { id: number }[];
   return rows.map((r) => r.id);
 }
 
 /** Delete memories with their projections. memory_fts is a virtual table
  *  with no FK: its row is removed explicitly by rowid (pinned at
  *  memories.id), trigrams are deleted explicitly with the cascade as
- *  backstop, all in the caller's transaction. */
-function removeMemories(db: DatabaseSync, ids: number[]) {
-  const delFts = db.prepare("DELETE FROM memory_fts WHERE rowid = ?");
+ *  backstop, all in the caller's transaction. The FTS delete is gated on
+ *  the per-open capability: an fts-less build never created the table, so
+ *  it must never be touched. Returns the count of memories actually
+ *  deleted, so missing ids report zero instead of phantom removals. */
+function removeMemories(store: Store, ids: number[]): number {
+  const { db, fts } = store;
+  // node:sqlite prepare validates schema eagerly: on an fts-less build the
+  // FTS statement must not even be prepared, or it throws "no such table".
+  const delFts = fts
+    ? db.prepare("DELETE FROM memory_fts WHERE rowid = ?")
+    : null;
   const delGram = db.prepare("DELETE FROM trigrams WHERE memory_id = ?");
   const del = db.prepare("DELETE FROM memories WHERE id = ?");
+  let removed = 0;
   for (const id of ids) {
-    delFts.run(id);
+    delFts?.run(id);
     delGram.run(id);
-    del.run(id);
+    removed += Number(del.run(id).changes);
   }
+  return removed;
 }
 
 /** Lower importance on the selected memories. Returns the affected rows. */
