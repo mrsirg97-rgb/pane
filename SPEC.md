@@ -1,6 +1,6 @@
 # SPEC: todo v2 — task tracking without losing the queue
 
-Status: implemented (TDD, clean break). 119/119 tests green. Implementation: extensions/todo.ts v2 + extensions/__tests__/todo.test.mjs. See git diff; review before commit. Companion to README.md (philosophy) and AGENTS.md (contract).
+Status: implemented (TDD, clean break). 119/119 tests green. Implementation: extensions/todo.ts v2 + extensions/**tests**/todo.test.mjs. See git diff; review before commit. Companion to README.md (philosophy) and AGENTS.md (contract).
 
 ## Problem
 
@@ -56,7 +56,7 @@ CREATE INDEX IF NOT EXISTS tasks_pos_seq ON tasks (pos, created_seq);
 
 Rules:
 
-- Every call is one transaction: read the log, rebuild the projection, (append the event for a mutation), persist the projection. A torn write cannot desync log from projection because the projection is *always* rebuilt from the log; it is never trusted.
+- Every call is one transaction: read the log, rebuild the projection, (append the event for a mutation), persist the projection. A torn write cannot desync log from projection because the projection is _always_ rebuilt from the log; it is never trusted.
 - `read` appends no events. It rebuilds + persists the projection and renders from it.
 - Replay is total: it never throws. A corrupt args JSON or an inapplicable transition (e.g. `complete` on an unknown id) is skipped, never fatal. The log is the spine; one bad row cannot invalidate the queue.
 - `events` is append-only by construction: `UPDATE`/`DELETE` on events are forbidden by the tool. Compaction is a future story.
@@ -96,7 +96,7 @@ Scope: this is the cheapest honest version of "startup presence". A future foote
 ### D. Concurrency semantics
 
 - In-process: unchanged. `withLog` still serializes call order; tests stay scheduled, not slept.
-- Cross-process: WAL + busy_timeout serialize writers at the database level. Last-writer-wins remains (documented), but it is now *detectable*: the events log records both writers in commit order. Race analysis = replay the log, not guess from a single JSON file.
+- Cross-process: WAL + busy_timeout serialize writers at the database level. Last-writer-wins remains (documented), but it is now _detectable_: the events log records both writers in commit order. Race analysis = replay the log, not guess from a single JSON file.
 - The FSM checks run inside the transaction, against the freshly rebuilt projection. Same refusal strings, same semantics.
 
 ### E. Explicitly out of scope
@@ -110,7 +110,7 @@ Scope: this is the cheapest honest version of "startup presence". A future foote
 ## Compatibility
 
 - All six actions, argument names, FSM transitions, render output, and error strings remain identical. The API-level behavioral tests are frozen.
-- Store-shape tests change: `rawStore()` (JSON read) becomes sqlite queries. This is legitimate test evolution — the store is the thing changing — but the *behavioral* contract is frozen.
+- Store-shape tests change: `rawStore()` (JSON read) becomes sqlite queries. This is legitimate test evolution — the store is the thing changing — but the _behavioral_ contract is frozen.
 - No legacy store support. A missing database is an empty queue, by design.
 - Concurrency semantics preserved; races become detectable rather than silent.
 

@@ -221,7 +221,8 @@ export function shortHash(cwd: string): string {
 /** Resolve the storage scope for a write: 'project' keys on cwd, 'global'
  *  is explicit. The label is display-only; the key is internal. */
 function writeScope(scope: string | undefined, cwd: string) {
-  if (scope === SCOPE_GLOBAL) return { scope: SCOPE_GLOBAL, label: SCOPE_GLOBAL };
+  if (scope === SCOPE_GLOBAL)
+    return { scope: SCOPE_GLOBAL, label: SCOPE_GLOBAL };
   if (scope != null && scope !== "project")
     fail(`scope must be project or global, got '${scope}'`);
   return { scope: shortHash(cwd), label: basename(cwd) || "root" };
@@ -263,21 +264,36 @@ function decay(strength: number, days: number): number {
 
 /** Reinforcement for accesses since the last checkpoint, scaled by
  *  importance. Recall defers reinforcement to the consolidate pass. */
-function reinforce(strength: number, accessCount: number, importance: number): number {
+function reinforce(
+  strength: number,
+  accessCount: number,
+  importance: number,
+): number {
   return strength + accessCount * REINFORCE_RATE * importance;
 }
 
 /** The whole consolidation formula at a checkpoint: decay by days since the
  *  last checkpoint, reinforce the accesses since then, clamp. Idempotent: a
  *  replay with no elapsed time and no new accesses is a no-op. */
-function consolidate(strength: number, days: number, accessCount: number, importance: number): number {
+function consolidate(
+  strength: number,
+  days: number,
+  accessCount: number,
+  importance: number,
+): number {
   return clamp(reinforce(decay(strength, days), accessCount, importance));
 }
 
 /** Effective strength read at recall: what consolidate would persist now.
  *  Never persisted here; the prune consolidate pass persists the same
  *  computation, so the two paths agree and cannot double-count. */
-function effectiveStrength(m: Pick<Memory, "strength" | "access_count" | "importance" | "last_consolidated_at">, nowIso: string): number {
+function effectiveStrength(
+  m: Pick<
+    Memory,
+    "strength" | "access_count" | "importance" | "last_consolidated_at"
+  >,
+  nowIso: string,
+): number {
   return consolidate(
     m.strength,
     daysBetween(m.last_consolidated_at, nowIso),
@@ -357,7 +373,11 @@ function semanticArm(
     .all(ftsQuery(tokens), ...scopes, kind ?? null, kind ?? null, cap) as {
     memory_id: number;
   }[];
-  return rows.map((r, i) => ({ memory_id: r.memory_id, arm: "fts" as const, rank: i + 1 }));
+  return rows.map((r, i) => ({
+    memory_id: r.memory_id,
+    arm: "fts" as const,
+    rank: i + 1,
+  }));
 }
 
 /** Fuzzy arm: trigram overlap, containment threshold enforced as a minimum
@@ -388,14 +408,21 @@ function fuzzyArm(
     .all(...grams, ...scopes, kind ?? null, kind ?? null, minOverlap, cap) as {
     memory_id: number;
   }[];
-  return rows.map((r, i) => ({ memory_id: r.memory_id, arm: "fuzzy" as const, rank: i + 1 }));
+  return rows.map((r, i) => ({
+    memory_id: r.memory_id,
+    arm: "fuzzy" as const,
+    rank: i + 1,
+  }));
 }
 
 /** Reciprocal-rank fusion: dedup by memory_id, sum per-arm contributions. */
 function fuse(
   arms: { memory_id: number; arm: "fts" | "fuzzy"; rank: number }[][],
 ): Map<number, { score: number; match: "fts" | "fuzzy" | "both" }> {
-  const fused = new Map<number, { score: number; match: "fts" | "fuzzy" | "both" }>();
+  const fused = new Map<
+    number,
+    { score: number; match: "fts" | "fuzzy" | "both" }
+  >();
   for (const arm of arms) {
     for (const hit of arm) {
       const prev = fused.get(hit.memory_id);
@@ -414,7 +441,9 @@ function fuse(
 function hydrate(db: DatabaseSync, ids: number[]): Map<number, Memory> {
   if (!ids.length) return new Map();
   const rows = db
-    .prepare(`SELECT * FROM memories WHERE id IN (${ids.map(() => "?").join(",")})`)
+    .prepare(
+      `SELECT * FROM memories WHERE id IN (${ids.map(() => "?").join(",")})`,
+    )
     .all(...ids) as Memory[];
   return new Map(rows.map((r) => [r.id, r]));
 }
@@ -438,7 +467,8 @@ function recallScoped(
 
   const cap = k * ARM_CAP_FACTOR;
   const tokens = tokenize(query);
-  const arms: { memory_id: number; arm: "fts" | "fuzzy"; rank: number }[][] = [];
+  const arms: { memory_id: number; arm: "fts" | "fuzzy"; rank: number }[][] =
+    [];
   if (store.fts) arms.push(semanticArm(db, tokens, scopes, kind, cap));
   const grams = gramsOf(query);
   arms.push(fuzzyArm(db, grams, scopes, kind, cap));
@@ -458,7 +488,8 @@ function recallScoped(
     });
   }
   const blend = (h: Hit) =>
-    fused.get(h.id)!.score * (RANK_STRENGTH_FLOOR + RANK_STRENGTH_GAIN * h.effective_strength);
+    fused.get(h.id)!.score *
+    (RANK_STRENGTH_FLOOR + RANK_STRENGTH_GAIN * h.effective_strength);
   const live = scored
     .filter((h) => h.superseded_by == null)
     .sort((a, b) => blend(b) - blend(a));
@@ -578,7 +609,8 @@ export default function remExtension(pi: ExtensionAPI) {
       "arithmetic or removes/reduces memories. Scopes: 'global' for general knowledge, default " +
       "project (cwd). Recall k caps live hits; no query = browse. Ids are minted mN; copy, " +
       "never invent.",
-    promptSnippet: "Commit facts, recall past solutions, reflect logs, prune memories",
+    promptSnippet:
+      "Commit facts, recall past solutions, reflect logs, prune memories",
     promptGuidelines: [
       "memories persist across sessions; scope='global' for general knowledge, default is the current project (cwd).",
       "learn is idempotent on content; re-learn to update importance or supersede a stale memory.",
@@ -589,10 +621,20 @@ export default function remExtension(pi: ExtensionAPI) {
     ],
     parameters: Type.Object({
       action: ACTION,
-      content: Type.Optional(Type.String({ description: "Memory content (learn/reflect)" })),
-      query: Type.Optional(Type.String({ description: "Recall intent; omit to browse" })),
-      source: Type.Optional(Type.String({ description: "Raw source log for provenance (reflect)" })),
-      kind: Type.Optional(Type.String({ description: "Free-form kind label; reuse consistently" })),
+      content: Type.Optional(
+        Type.String({ description: "Memory content (learn/reflect)" }),
+      ),
+      query: Type.Optional(
+        Type.String({ description: "Recall intent; omit to browse" }),
+      ),
+      source: Type.Optional(
+        Type.String({ description: "Raw source log for provenance (reflect)" }),
+      ),
+      kind: Type.Optional(
+        Type.String({
+          description: "Free-form kind label; reuse consistently",
+        }),
+      ),
       importance: Type.Optional(
         Type.Number({
           minimum: 0,
@@ -600,9 +642,7 @@ export default function remExtension(pi: ExtensionAPI) {
           description: "0..1; strength starts here and decays",
         }),
       ),
-      scope: Type.Optional(
-        SCOPE_PARAM,
-      ),
+      scope: Type.Optional(SCOPE_PARAM),
       k: Type.Optional(
         Type.Integer({
           minimum: 1,
@@ -617,29 +657,38 @@ export default function remExtension(pi: ExtensionAPI) {
         Type.Array(Type.Integer({ description: "Memory ids to prune" })),
       ),
       older_than_days: Type.Optional(
-        Type.Integer({ minimum: 1, description: "Selection criterion for prune" }),
+        Type.Integer({
+          minimum: 1,
+          description: "Selection criterion for prune",
+        }),
       ),
       supersedes: Type.Optional(
-        Type.Union([
-          Type.Integer(),
-          Type.Array(Type.Integer()),
-        ]),
+        Type.Union([Type.Integer(), Type.Array(Type.Integer())]),
       ),
       include_superseded: Type.Optional(
-        Type.Boolean({ description: "Fill unused budget with superseded hits" }),
+        Type.Boolean({
+          description: "Fill unused budget with superseded hits",
+        }),
       ),
     }),
     renderShell: "self",
     renderCall(args: any, theme, ctx) {
       const detail =
         typeof args?.action === "string"
-          ? theme.fg("text", [args.action, args.k ? `k=${args.k}` : undefined].filter(Boolean).join(" "))
+          ? theme.fg(
+              "text",
+              [args.action, args.k ? `k=${args.k}` : undefined]
+                .filter(Boolean)
+                .join(" "),
+            )
           : undefined;
       return header(theme, ctx, "rem", detail);
     },
     renderResult(result, _options, theme, _ctx) {
       if (result.isError) return errorText(theme, result);
-      const d = (result.details as { hits?: Hit[]; memories?: Memory[] } | undefined) ?? {};
+      const d =
+        (result.details as { hits?: Hit[]; memories?: Memory[] } | undefined) ??
+        {};
       if (d.hits) return new Text(indent(render(d.hits)), 0, 0);
       if (d.memories?.length) {
         const rows = d.memories.map(
@@ -711,7 +760,8 @@ export default function remExtension(pi: ExtensionAPI) {
           }
 
           if (action === "learn") {
-            const content = params.content ?? fail("action 'learn' requires content");
+            const content =
+              params.content ?? fail("action 'learn' requires content");
             const scope = writeScope(params.scope, cwd);
             const { row, existing } = storeMemory(store, {
               content,
@@ -727,10 +777,9 @@ export default function remExtension(pi: ExtensionAPI) {
             if (existing) {
               let note = `already known m${row.id}`;
               if (params.importance != null) {
-                db.prepare("UPDATE memories SET importance = ? WHERE id = ?").run(
-                  params.importance,
-                  row.id,
-                );
+                db.prepare(
+                  "UPDATE memories SET importance = ? WHERE id = ?",
+                ).run(params.importance, row.id);
                 note += ` · importance → ${params.importance}`;
               }
               const fresh = db
@@ -742,13 +791,19 @@ export default function remExtension(pi: ExtensionAPI) {
               };
             }
             return {
-              content: [{ type: "text", text: `learned m${row.id} (${row.scope_label} · ${row.kind} · ${row.importance})` }],
+              content: [
+                {
+                  type: "text",
+                  text: `learned m${row.id} (${row.scope_label} · ${row.kind} · ${row.importance})`,
+                },
+              ],
               details: { action, memories: [row] },
             };
           }
 
           if (action === "reflect") {
-            const content = params.content ?? fail("action 'reflect' requires content");
+            const content =
+              params.content ?? fail("action 'reflect' requires content");
             const scope = writeScope(params.scope, cwd);
             const { row, existing } = storeMemory(store, {
               content,
@@ -761,10 +816,9 @@ export default function remExtension(pi: ExtensionAPI) {
             if (existing) {
               let note = `already known m${row.id}`;
               if (params.importance != null) {
-                db.prepare("UPDATE memories SET importance = ? WHERE id = ?").run(
-                  params.importance,
-                  row.id,
-                );
+                db.prepare(
+                  "UPDATE memories SET importance = ? WHERE id = ?",
+                ).run(params.importance, row.id);
                 note += ` · importance → ${params.importance}`;
               }
               if (params.source != null && params.source !== row.source) {
@@ -783,13 +837,20 @@ export default function remExtension(pi: ExtensionAPI) {
               };
             }
             return {
-              content: [{ type: "text", text: `reflected m${row.id} (${row.scope_label} · ${row.kind} · ${row.importance})` }],
+              content: [
+                {
+                  type: "text",
+                  text: `reflected m${row.id} (${row.scope_label} · ${row.kind} · ${row.importance})`,
+                },
+              ],
               details: { action, memories: [row] },
             };
           }
 
           if (action === "prune") {
-            const verb = params.verb ?? fail("prune requires verb remove|reduce|consolidate");
+            const verb =
+              params.verb ??
+              fail("prune requires verb remove|reduce|consolidate");
             const sel = {
               ids: params.ids,
               scope: params.scope,
@@ -800,7 +861,12 @@ export default function remExtension(pi: ExtensionAPI) {
             if (verb === "consolidate") {
               const consolidated = consolidatePass(db, sel);
               return {
-                content: [{ type: "text", text: `consolidated ${consolidated} memories` }],
+                content: [
+                  {
+                    type: "text",
+                    text: `consolidated ${consolidated} memories`,
+                  },
+                ],
                 details: { action, consolidated },
               };
             }
@@ -812,10 +878,17 @@ export default function remExtension(pi: ExtensionAPI) {
                 details: { action, removed },
               };
             }
-            const importance = params.importance ?? fail("reduce needs an importance to lower to");
+            const importance =
+              params.importance ??
+              fail("reduce needs an importance to lower to");
             const reduced = reduceImportance(db, ids, importance);
             return {
-              content: [{ type: "text", text: `reduced ${reduced.length} to ${importance}` }],
+              content: [
+                {
+                  type: "text",
+                  text: `reduced ${reduced.length} to ${importance}`,
+                },
+              ],
               details: { action, reduced: reduced.map((r) => r.id) },
             };
           }
@@ -856,18 +929,26 @@ export default function remExtension(pi: ExtensionAPI) {
 /** Mark targets as superseded by the given memory; every target must exist
  *  (loud refusal), so a typo never silently corrupts the trust chain. A
  *  target that is the memory itself is a no-op: nothing can supersede it. */
-function applySupersedes(db: DatabaseSync, byId: number, targets: number | number[]) {
+function applySupersedes(
+  db: DatabaseSync,
+  byId: number,
+  targets: number | number[],
+) {
   const raw = Array.isArray(targets) ? targets : [targets];
   const uniq = [...new Set(raw)].filter((id) => id !== byId);
   if (!uniq.length) return;
   const rows = db
-    .prepare(`SELECT id FROM memories WHERE id IN (${uniq.map(() => "?").join(",")})`)
+    .prepare(
+      `SELECT id FROM memories WHERE id IN (${uniq.map(() => "?").join(",")})`,
+    )
     .all(...uniq) as { id: number }[];
   const found = new Set(rows.map((r) => r.id));
   for (const id of uniq) {
     if (!found.has(id)) fail(`supersedes target m${id} not found`);
   }
-  const update = db.prepare("UPDATE memories SET superseded_by = ? WHERE id = ?");
+  const update = db.prepare(
+    "UPDATE memories SET superseded_by = ? WHERE id = ?",
+  );
   for (const id of uniq) update.run(byId, id);
 }
 
@@ -889,7 +970,9 @@ function consolidatePass(
   const where: string[] = [];
   const args: (string | number)[] = [];
   const ids =
-    Array.isArray(sel.ids) && sel.ids.length ? [...new Set(sel.ids)] : undefined;
+    Array.isArray(sel.ids) && sel.ids.length
+      ? [...new Set(sel.ids)]
+      : undefined;
   if (ids) {
     where.push(`id IN (${ids.map(() => "?").join(",")})`);
     args.push(...ids);
@@ -1001,13 +1084,18 @@ function removeMemories(store: Store, ids: number[]): number {
 }
 
 /** Lower importance on the selected memories. Returns the affected rows. */
-function reduceImportance(db: DatabaseSync, ids: number[], importance: number): Memory[] {
+function reduceImportance(
+  db: DatabaseSync,
+  ids: number[],
+  importance: number,
+): Memory[] {
   if (!ids.length) return [];
   const update = db.prepare("UPDATE memories SET importance = ? WHERE id = ?");
   for (const id of ids) update.run(importance, id);
   const rows = db
-    .prepare(`SELECT * FROM memories WHERE id IN (${ids.map(() => "?").join(",")})`)
+    .prepare(
+      `SELECT * FROM memories WHERE id IN (${ids.map(() => "?").join(",")})`,
+    )
     .all(...ids) as Memory[];
   return rows;
 }
-

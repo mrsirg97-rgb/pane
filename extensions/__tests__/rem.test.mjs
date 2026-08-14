@@ -24,9 +24,11 @@ const cwd2 = join(scratch, "ws2");
 mkdirSync(cwd1);
 mkdirSync(cwd2);
 
-const { tool, handlers, exports: remMod } = await loadExtensionTool(
-  join(EXT_DIR, "rem.ts"),
-);
+const {
+  tool,
+  handlers,
+  exports: remMod,
+} = await loadExtensionTool(join(EXT_DIR, "rem.ts"));
 const { Value } = await typeboxValueModule();
 const remDir = join(scratch, ".pi", "agent", "rem");
 const dbFile = join(remDir, "rem.sqlite");
@@ -90,7 +92,6 @@ function idOf(content) {
   const hit = rows.find((r) => r.content === content);
   return hit ? hit.id : null;
 }
-
 
 // ---- schema: failure modes live at the schema level ----
 test("bare rem() is schema-invalid (the failure mode)", () => {
@@ -203,7 +204,10 @@ test("learn supersedes references an existing memory; missing target refuses lou
     supersedes: oldId,
   });
   assert.equal(r2.details.memories[0].superseded_by, null); // the new one is not superseded
-  assert.equal(memRows().find((r) => r.content === "old way").superseded_by, r2.details.memories[0].id);
+  assert.equal(
+    memRows().find((r) => r.content === "old way").superseded_by,
+    r2.details.memories[0].id,
+  );
   await assert.rejects(
     () =>
       tool.execute("t9", {
@@ -237,10 +241,16 @@ test("learn refuses scope=all at execute (loud)", async () => {
 
 test("per-project memories are isolated by cwd scope", async () => {
   use(cwd1);
-  const r1 = await tool.execute("t12", { action: "learn", content: "only ws1" });
+  const r1 = await tool.execute("t12", {
+    action: "learn",
+    content: "only ws1",
+  });
   const m1 = r1.details.memories[0];
   use(cwd2);
-  const r2 = await tool.execute("t13", { action: "learn", content: "only ws1" });
+  const r2 = await tool.execute("t13", {
+    action: "learn",
+    content: "only ws1",
+  });
   const m2 = r2.details.memories[0];
   assert.notEqual(m1.id, m2.id); // distinct scope, distinct memory
   assert.equal(m1.scope_label, "ws1");
@@ -249,7 +259,10 @@ test("per-project memories are isolated by cwd scope", async () => {
 
 test("re-learn with supersedes including its own id is a no-op (no self-demotion)", async () => {
   use(cwd1);
-  const r1 = await tool.execute("t14", { action: "learn", content: "self ref" });
+  const r1 = await tool.execute("t14", {
+    action: "learn",
+    content: "self ref",
+  });
   const id = r1.details.memories[0].id;
   const r2 = await tool.execute("t15", {
     action: "learn",
@@ -268,7 +281,10 @@ test("recall by prose intent finds the memory (both arms reach)", async () => {
     action: "learn",
     content: "the api returns 429 when the token expires",
   }); // idempotent: also seeds the shared corpus
-  const r = await tool.execute("t21", { action: "recall", query: "token expires" });
+  const r = await tool.execute("t21", {
+    action: "recall",
+    query: "token expires",
+  });
   assert.equal(r.isError, undefined);
   const hits = r.details.hits;
   assert.equal(hits.length, 1);
@@ -341,9 +357,15 @@ test("fts-less build disables only the semantic arm; fuzzy fallback still serves
     assert.ok(hit);
     assert.equal(hit.match, "fuzzy"); // semantic arm off, fuzzy-only fallback
     // learn on the fts-less build must not attempt the FTS insert
-    const lr = await tool.execute("t30a", { action: "learn", content: "ftsless newcomer" });
+    const lr = await tool.execute("t30a", {
+      action: "learn",
+      content: "ftsless newcomer",
+    });
     assert.equal(lr.isError, undefined);
-    const rr = await tool.execute("t30b", { action: "recall", query: "ftsless" });
+    const rr = await tool.execute("t30b", {
+      action: "recall",
+      query: "ftsless",
+    });
     assert.ok(rr.details.hits.some((h) => h.content === "ftsless newcomer"));
   } finally {
     remMod.__setFtsAvailable(undefined);
@@ -363,25 +385,48 @@ test("recall k caps live hits", async () => {
   for (let i = 1; i <= 5; i++) {
     await tool.execute(`t3${i}`, { action: "learn", content: `pattern ${i}` });
   }
-  const r = await tool.execute("t36", { action: "recall", query: "pattern", k: 2 });
+  const r = await tool.execute("t36", {
+    action: "recall",
+    query: "pattern",
+    k: 2,
+  });
   assert.equal(r.details.hits.length, 2);
 });
 
 test("effective strength: an aged memory loses to a fresh one, stored strength untouched", async () => {
   use(cwd1);
-  await tool.execute("t37", { action: "learn", content: "aged fix for widget" });
+  await tool.execute("t37", {
+    action: "learn",
+    content: "aged fix for widget",
+  });
   const aged = memRows().find((r) => r.content === "aged fix for widget");
   const old = new Date(Date.now() - 40 * 86400000).toISOString();
   const db = openDb();
-  db.prepare("UPDATE memories SET last_consolidated_at = ? WHERE id = ?").run(old, aged.id);
+  db.prepare("UPDATE memories SET last_consolidated_at = ? WHERE id = ?").run(
+    old,
+    aged.id,
+  );
   db.close();
-  await tool.execute("t38", { action: "learn", content: "fresh fix for widget" });
-  const r = await tool.execute("t39", { action: "recall", query: "widget fix" });
-  const fresh = r.details.hits.find((h) => h.content === "fresh fix for widget");
-  const agedHit = r.details.hits.find((h) => h.content === "aged fix for widget");
+  await tool.execute("t38", {
+    action: "learn",
+    content: "fresh fix for widget",
+  });
+  const r = await tool.execute("t39", {
+    action: "recall",
+    query: "widget fix",
+  });
+  const fresh = r.details.hits.find(
+    (h) => h.content === "fresh fix for widget",
+  );
+  const agedHit = r.details.hits.find(
+    (h) => h.content === "aged fix for widget",
+  );
   assert.ok(fresh && agedHit);
   assert.ok(fresh.effective_strength > agedHit.effective_strength);
-  assert.ok(agedHit.effective_strength < 0.3, "decay must be observable without consolidate");
+  assert.ok(
+    agedHit.effective_strength < 0.3,
+    "decay must be observable without consolidate",
+  );
   const row = memRows().find((r) => r.content === "aged fix for widget");
   assert.equal(row.strength, 0.5); // recall never persists strength
   assert.equal(row.access_count, 1); // but it does touch the counter
@@ -390,14 +435,20 @@ test("effective strength: an aged memory loses to a fresh one, stored strength u
 
 test("superseded memories drop by default; include_superseded fills the unused budget", async () => {
   use(cwd1);
-  const a = await tool.execute("t40", { action: "learn", content: "old approach to widgets" });
+  const a = await tool.execute("t40", {
+    action: "learn",
+    content: "old approach to widgets",
+  });
   const oldId = a.details.memories[0].id;
   await tool.execute("t41", {
     action: "learn",
     content: "new approach to widgets",
     supersedes: oldId,
   });
-  const r1 = await tool.execute("t42", { action: "recall", query: "widgets approach" });
+  const r1 = await tool.execute("t42", {
+    action: "recall",
+    query: "widgets approach",
+  });
   assert.equal(r1.details.hits.length, 1);
   assert.equal(r1.details.hits[0].content, "new approach to widgets");
   const r2 = await tool.execute("t43", {
@@ -406,39 +457,68 @@ test("superseded memories drop by default; include_superseded fills the unused b
     include_superseded: true,
   });
   assert.equal(r2.details.hits.length, 2);
-  const old = r2.details.hits.find((h) => h.content === "old approach to widgets");
-  assert.equal(old.superseded_by, r2.details.hits.find((h) => h.content === "new approach to widgets").id);
+  const old = r2.details.hits.find(
+    (h) => h.content === "old approach to widgets",
+  );
+  assert.equal(
+    old.superseded_by,
+    r2.details.hits.find((h) => h.content === "new approach to widgets").id,
+  );
 });
 
 // ---- recall: scope model ----
 test("hybrid scope: project hits first, global fills only the unused budget", async () => {
   use(cwd2);
-  await tool.execute("t44", { action: "learn", content: "global widget lore", scope: "global" });
-  await tool.execute("t45", { action: "learn", content: "global widget warning", scope: "global" });
+  await tool.execute("t44", {
+    action: "learn",
+    content: "global widget lore",
+    scope: "global",
+  });
+  await tool.execute("t45", {
+    action: "learn",
+    content: "global widget warning",
+    scope: "global",
+  });
   use(cwd1);
   const thin = await tool.execute("t46", { action: "recall", query: "widget" });
   // ws1 has exactly one live 'widget' memory (new approach); the budget has room for global fill
   const labels = thin.details.hits.map((h) => h.scope_label);
   assert.equal(labels[0], "ws1"); // project first
   assert.ok(labels.includes("global")); // fill after the project hit
-  const full = await tool.execute("t47", { action: "recall", query: "widget", k: 1 });
+  const full = await tool.execute("t47", {
+    action: "recall",
+    query: "widget",
+    k: 1,
+  });
   assert.equal(full.details.hits.length, 1);
   assert.equal(full.details.hits[0].scope_label, "ws1"); // budget full: no global
 });
 
 test("scope=all interleaves scopes; scope=global excludes project", async () => {
   use(cwd1);
-  const all = await tool.execute("t48", { action: "recall", query: "widget", scope: "all" });
+  const all = await tool.execute("t48", {
+    action: "recall",
+    query: "widget",
+    scope: "all",
+  });
   const labels = all.details.hits.map((h) => h.scope_label);
   assert.ok(labels.includes("ws1") && labels.includes("global"));
-  const g = await tool.execute("t49", { action: "recall", query: "widget", scope: "global" });
+  const g = await tool.execute("t49", {
+    action: "recall",
+    query: "widget",
+    scope: "global",
+  });
   assert.ok(g.details.hits.length > 0);
   assert.ok(g.details.hits.every((h) => h.scope_label === "global"));
 });
 
 test("kind filter narrows recall", async () => {
   use(cwd1);
-  await tool.execute("t50", { action: "learn", content: "widget is blue", kind: "constraint" });
+  await tool.execute("t50", {
+    action: "learn",
+    content: "widget is blue",
+    kind: "constraint",
+  });
   const r = await tool.execute("t51", {
     action: "recall",
     query: "widget",
@@ -496,7 +576,10 @@ test("reflect accepts explicit importance and is idempotent on memory", async ()
     importance: 0.7,
   });
   assert.equal(r1.details.memories[0].id, r2.details.memories[0].id);
-  assert.equal(memRows().filter((r) => r.content === "repeatable reflection").length, 1);
+  assert.equal(
+    memRows().filter((r) => r.content === "repeatable reflection").length,
+    1,
+  );
   assert.match(textOf(r2), /already known/);
 });
 
@@ -519,7 +602,10 @@ test("session_compact hook is fire-and-forget: bad events never crash", async ()
   const before = memRows().length;
   await handlers.session_compact(undefined, { cwd: cwd2 });
   await handlers.session_compact({ compactionEntry: {} }, { cwd: cwd2 });
-  await handlers.session_compact({ compactionEntry: { summary: "  " } }, { cwd: cwd2 });
+  await handlers.session_compact(
+    { compactionEntry: { summary: "  " } },
+    { cwd: cwd2 },
+  );
   assert.equal(memRows().length, before);
 });
 
@@ -543,11 +629,17 @@ test("prune consolidate is idempotent: decays aged strength, resets the window",
     row.id,
   );
   db.close();
-  const r1 = await tool.execute("t72", { action: "prune", verb: "consolidate" });
+  const r1 = await tool.execute("t72", {
+    action: "prune",
+    verb: "consolidate",
+  });
   const after = memRows().find((r) => r.content === "consolidate me");
   assert.ok(after.strength < 0.3, "decay must be persisted by consolidate");
   assert.equal(after.access_count, 0, "checkpoint window resets");
-  const r2 = await tool.execute("t73", { action: "prune", verb: "consolidate" });
+  const r2 = await tool.execute("t73", {
+    action: "prune",
+    verb: "consolidate",
+  });
   const twice = memRows().find((r) => r.content === "consolidate me");
   // replay with no elapsed time is a no-op; floating-point drift stays below 1e-6
   assert.ok(
@@ -564,7 +656,10 @@ test("consolidate reinforces accessed memories and no-ops on fresh ones", async 
   await tool.execute("t76", { action: "prune", verb: "consolidate" });
   const after = memRows().find((r) => r.content === "fresh target");
   // no age, but the access reinforces 0.05 x importance
-  assert.ok(after.strength > 0.5 && after.strength <= 0.6, "reinforcement must apply");
+  assert.ok(
+    after.strength > 0.5 && after.strength <= 0.6,
+    "reinforcement must apply",
+  );
 });
 
 test("prune remove by ids deletes memory + fts row (rowid) + trigrams, no orphans", async () => {
@@ -577,14 +672,21 @@ test("prune remove by ids deletes memory + fts row (rowid) + trigrams, no orphan
     ids: [doomed.id],
   });
   assert.match(textOf(r), /removed 1/);
-  assert.equal(memRows().find((r) => r.content === "doomed memory"), undefined);
+  assert.equal(
+    memRows().find((r) => r.content === "doomed memory"),
+    undefined,
+  );
   assert.equal(ftsRow(doomed.id), undefined, "no orphaned fts row");
   assert.equal(gramRows(doomed.id).length, 0, "no orphaned trigram rows");
 });
 
 test("prune remove by criteria: older_than_days and kind and scope", async () => {
   use(cwd1);
-  await tool.execute("t79", { action: "learn", content: "old constraint", kind: "constraint" });
+  await tool.execute("t79", {
+    action: "learn",
+    content: "old constraint",
+    kind: "constraint",
+  });
   const old = memRows().find((r) => r.content === "old constraint");
   const db = openDb();
   db.prepare("UPDATE memories SET created_at = ? WHERE id = ?").run(
@@ -598,8 +700,14 @@ test("prune remove by criteria: older_than_days and kind and scope", async () =>
     kind: "constraint",
   });
   assert.match(textOf(r1), /removed \d+/);
-  assert.equal(memRows().find((r) => r.content === "old constraint"), undefined);
-  assert.ok(memRows().some((r) => r.kind !== "constraint"), "other kinds survive");
+  assert.equal(
+    memRows().find((r) => r.content === "old constraint"),
+    undefined,
+  );
+  assert.ok(
+    memRows().some((r) => r.kind !== "constraint"),
+    "other kinds survive",
+  );
   await tool.execute("t81", { action: "learn", content: "young victim" });
   const young = memRows().find((r) => r.content === "young victim");
   const r2 = await tool.execute("t82", {
@@ -644,7 +752,11 @@ test("prune consolidate honors a selection; no selection means the whole store",
   assert.ok(after.strength < 0.3, "selected memory decays");
   const kept = memRows().find((r) => r.content === "narrow bystander");
   assert.equal(kept.strength, 0.5, "unselected memory untouched");
-  assert.equal(kept.last_consolidated_at, before, "checkpoint window untouched");
+  assert.equal(
+    kept.last_consolidated_at,
+    before,
+    "checkpoint window untouched",
+  );
 });
 
 test("prune remove on a genuinely fts-less store never touches memory_fts", async () => {
@@ -663,7 +775,10 @@ test("prune remove on a genuinely fts-less store never touches memory_fts", asyn
     });
     assert.equal(r.isError, undefined);
     assert.match(textOf(r), /removed 1/);
-    assert.equal(memRows().find((r) => r.content === "ftsless victim"), undefined);
+    assert.equal(
+      memRows().find((r) => r.content === "ftsless victim"),
+      undefined,
+    );
     assert.equal(gramRows(v.id).length, 0, "trigrams still cleaned");
   } finally {
     remMod.__setFtsAvailable(undefined);
@@ -684,10 +799,19 @@ test("prune remove/reduce with no selection refuse loudly", async () => {
 
 test("prune reduce lowers importance; missing target importance refuses loudly", async () => {
   use(cwd1);
-  await tool.execute("t85", { action: "learn", content: "reducable", importance: 0.9 });
+  await tool.execute("t85", {
+    action: "learn",
+    content: "reducable",
+    importance: 0.9,
+  });
   const target = memRows().find((r) => r.content === "reducable");
   await assert.rejects(
-    () => tool.execute("t86", { action: "prune", verb: "reduce", ids: [target.id] }),
+    () =>
+      tool.execute("t86", {
+        action: "prune",
+        verb: "reduce",
+        ids: [target.id],
+      }),
     /reduce needs an importance/,
   );
   const r = await tool.execute("t87", {
@@ -697,12 +821,18 @@ test("prune reduce lowers importance; missing target importance refuses loudly",
     importance: 0.2,
   });
   assert.match(textOf(r), /reduced 1 to 0.2/);
-  assert.equal(memRows().find((r) => r.content === "reducable").importance, 0.2);
+  assert.equal(
+    memRows().find((r) => r.content === "reducable").importance,
+    0.2,
+  );
 });
 
 test("removing the superseding memory unsupersedes the older (SET NULL)", async () => {
   use(cwd1);
-  const a = await tool.execute("t88", { action: "learn", content: "superseded legacy" });
+  const a = await tool.execute("t88", {
+    action: "learn",
+    content: "superseded legacy",
+  });
   const oldId = a.details.memories[0].id;
   const b = await tool.execute("t89", {
     action: "learn",
@@ -714,22 +844,35 @@ test("removing the superseding memory unsupersedes the older (SET NULL)", async 
   const legacy = memRows().find((r) => r.content === "superseded legacy");
   assert.equal(legacy.superseded_by, null);
   const r = await tool.execute("t91", { action: "recall", query: "legacy" });
-  assert.ok(r.details.hits.some((h) => h.content === "superseded legacy"), "legacy resurfaces");
+  assert.ok(
+    r.details.hits.some((h) => h.content === "superseded legacy"),
+    "legacy resurfaces",
+  );
 });
 
 test("AUTOINCREMENT: pruned ids are never reused by later learns", async () => {
   use(cwd1);
-  const r1 = await tool.execute("t92", { action: "learn", content: "highest id victim" });
+  const r1 = await tool.execute("t92", {
+    action: "learn",
+    content: "highest id victim",
+  });
   const victim = r1.details.memories[0].id;
   await tool.execute("t93", { action: "prune", verb: "remove", ids: [victim] });
-  const r2 = await tool.execute("t94", { action: "learn", content: "id reuse probe" });
+  const r2 = await tool.execute("t94", {
+    action: "learn",
+    content: "id reuse probe",
+  });
   const next = r2.details.memories[0].id;
   assert.ok(next > victim, "rowid reuse would re-point superseded_by");
 });
 
 test("prune remove by ids ignores scope: the ids are the selection", async () => {
   use(cwd2);
-  await tool.execute("t95", { action: "learn", content: "global doomed", scope: "global" });
+  await tool.execute("t95", {
+    action: "learn",
+    content: "global doomed",
+    scope: "global",
+  });
   const g = memRows().find((r) => r.content === "global doomed");
   use(cwd1);
   // default scope = cwd1: an explicit ids selection still needs the right scope filter
@@ -739,7 +882,10 @@ test("prune remove by ids ignores scope: the ids are the selection", async () =>
     ids: [g.id],
   });
   assert.match(textOf(local), /removed 1/); // ids selection ignores scope; row is gone
-  assert.equal(memRows().find((r) => r.content === "global doomed"), undefined);
+  assert.equal(
+    memRows().find((r) => r.content === "global doomed"),
+    undefined,
+  );
 });
 
 test("concurrent calls serialize deterministically in call order", async () => {
@@ -750,7 +896,9 @@ test("concurrent calls serialize deterministically in call order", async () => {
   ]);
   assert.equal(learned.isError, undefined);
   // recall queued after learn: must observe the fresh memory
-  assert.ok(recalled.details.hits.some((h) => h.content === "serialized witness"));
+  assert.ok(
+    recalled.details.hits.some((h) => h.content === "serialized witness"),
+  );
   const [recalled2] = await Promise.all([
     tool.execute("t99", { action: "recall", query: "serialized" }),
     tool.execute("t9a", { action: "learn", content: "later witness" }),

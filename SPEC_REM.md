@@ -1,10 +1,10 @@
 # SPEC: rem v1 — a memory tool for the pi harness
 
-Status: proposal, amended per review, pending final approval. Implementation target: extensions/rem.ts + extensions/__tests__/rem.test.mjs, TDD. Design draws on the concepts in ~/Projects/lift/cmd/rem (recall fusion, consolidation arithmetic, idempotent writes), translated to SQLite and trimmed to a native pi tool.
+Status: proposal, amended per review, pending final approval. Implementation target: extensions/rem.ts + extensions/**tests**/rem.test.mjs, TDD. Design draws on the concepts in ~/Projects/lift/cmd/rem (recall fusion, consolidation arithmetic, idempotent writes), translated to SQLite and trimmed to a native pi tool.
 
 ## Problem
 
-The agent has no memory across sessions. Each session starts from nothing: the same debugging epiphany, the same constraint, the same fixed approach are re-derived every time. Files encode what was *done*, not what was *learned*. What is missing is a tool that commits facts and constraints durably, recalls past solutions on intent, distills long sessions into compact memories, and degrades gracefully as memories age.
+The agent has no memory across sessions. Each session starts from nothing: the same debugging epiphany, the same constraint, the same fixed approach are re-derived every time. Files encode what was _done_, not what was _learned_. What is missing is a tool that commits facts and constraints durably, recalls past solutions on intent, distills long sessions into compact memories, and degrades gracefully as memories age.
 
 The heavy machinery already exists (lift/rem: sources, episodes, associations, MCP). A native pi tool does not need that surface. Four operations, SQLite backend, same extension patterns as todo.ts.
 
@@ -124,12 +124,12 @@ Constants (named, one comment each): decay rate 0.02/day (half-life ~35 days), r
 
 ### H. Operations
 
-| op | read/write | params | semantics |
-|----|-----------|--------|-----------|
-| `learn` | write | content*, kind?, importance?, scope? (project\|global), supersedes? (id\|ids) | idempotent on (scope, md5(content)); existing rows accept importance and supersedes updates, content unchanged; supersedes targets must exist, loud refusal otherwise |
-| `recall` | read | query?, k?, scope? (project\|global\|all), kind?, include_superseded? | two-arm fusion, effective-strength blend, live-hit k budget; no query = browse; touches access counters only |
-| `reflect` | write | content*, source?, scope?, importance? | stores the distilled memory with raw source for provenance; kind defaults to reflection; importance defaults lower (0.3) |
-| `prune` | write | verb* (remove\|reduce\|consolidate), ids?, scope?, kind?, older_than_days?, importance? | consolidate = persisted arithmetic pass; remove/reduce need selection (ids or criteria), loud refusal otherwise; reduce requires a target importance |
+| op        | read/write | params                                                                                  | semantics                                                                                                                                                             |
+| --------- | ---------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `learn`   | write      | content*, kind?, importance?, scope? (project\|global), supersedes? (id\|ids)           | idempotent on (scope, md5(content)); existing rows accept importance and supersedes updates, content unchanged; supersedes targets must exist, loud refusal otherwise |
+| `recall`  | read       | query?, k?, scope? (project\|global\|all), kind?, include_superseded?                   | two-arm fusion, effective-strength blend, live-hit k budget; no query = browse; touches access counters only                                                          |
+| `reflect` | write      | content*, source?, scope?, importance?                                                  | stores the distilled memory with raw source for provenance; kind defaults to reflection; importance defaults lower (0.3)                                              |
+| `prune`   | write      | verb* (remove\|reduce\|consolidate), ids?, scope?, kind?, older_than_days?, importance? | consolidate = persisted arithmetic pass; remove/reduce need selection (ids or criteria), loud refusal otherwise; reduce requires a target importance                  |
 
 Selection for remove/reduce is `ids` OR criteria (`scope`/`kind`/`older_than_days`); `remove` reports actual deletions, so missing ids report zero rather than phantom removals. `consolidate` honors the same optional selection and defaults to the whole store when none is given: a scoped request is honored, never silently widened. Cross-field requirements are runtime-loud, exactly the todo pattern: schema-optional fields, loud execute-time checks.
 
