@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { loadExtensionTool, EXT_DIR } from "./_test-helpers.mjs";
+import { writeFileSync } from "node:fs";
+import { loadExtensionTool, scratchDir, EXT_DIR } from "./_test-helpers.mjs";
 
 const { tools, exports: ext } = await loadExtensionTool(
   join(EXT_DIR, "builtin-restyle.ts"),
@@ -228,6 +229,8 @@ test("write streams a live tail of the content while args arrive", () => {
   assert.match(streaming, /s5\b/);
   assert.doesNotMatch(streaming, /s4\b/);
   assert.match(streaming, /\+4 lines/);
+  assert.match(streaming, /\b5 s5\b/); // real file line numbers on the tail
+  assert.match(streaming, /\b14 s14\b/);
   const settled = rendered(
     write.renderCall({ path: "/home/ng/Projects/x.ts", content }, theme, ctx()),
   );
@@ -252,6 +255,60 @@ test("edit streams a live tail of the newest edit's newText", () => {
   assert.match(streaming, /line one/);
   assert.match(streaming, /line two/);
   assert.doesNotMatch(streaming, /\bdone\b/); // only the newest edit streams
+});
+
+test("edit live tail anchors line numbers by locating oldText in the file", () => {
+  const edit = tools.get("edit");
+  const dir = scratchDir();
+  const file = join(dir, "anchored.ts");
+  writeFileSync(file, "one\ntwo\nthree\nfour\nfive\n");
+  const streaming = rendered(
+    edit.renderCall(
+      {
+        path: file,
+        edits: [{ oldText: "three\nfour", newText: "THREE\nFOUR" }],
+      },
+      theme,
+      ctx({ executionStarted: false, argsComplete: false }),
+    ),
+  );
+  assert.match(streaming, /\b3 THREE\b/); // oldText starts at file line 3
+  assert.match(streaming, /\b4 FOUR\b/);
+  const missing = rendered(
+    edit.renderCall(
+      {
+        path: join(dir, "nope.ts"),
+        edits: [{ oldText: "x", newText: "plain" }],
+      },
+      theme,
+      ctx({ executionStarted: false, argsComplete: false }),
+    ),
+  );
+  assert.match(missing, /plain/);
+  assert.doesNotMatch(missing, /\d plain/); // unreadable file: unnumbered fallback
+});
+
+test("live tail is memoized: unchanged args restyle nothing", () => {
+  const write = tools.get("write");
+  const counting = () => {
+    let n = 0;
+    return {
+      theme: { ...theme, fg: (_c, t) => (n++, t) },
+      count: () => n,
+    };
+  };
+  const args = {
+    path: "/home/ng/Projects/x.ts",
+    content: Array.from({ length: 30 }, (_, i) => `m${i + 1}`).join("\n"),
+  };
+  const c = ctx({ executionStarted: false, argsComplete: false });
+  const first = counting();
+  write.renderCall(args, first.theme, c);
+  const second = counting();
+  write.renderCall(args, second.theme, c);
+  // second pass reuses the cached tail: only header + counter restyle
+  assert.ok(second.count() < first.count() / 2);
+  assert.ok(c.state.liveOut.includes("m30"));
 });
 
 test("errors render as error text, width 34 stays intact", () => {
