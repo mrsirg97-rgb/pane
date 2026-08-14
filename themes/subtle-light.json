@@ -12,13 +12,13 @@
     "dimGray": "#767676",
     "lightGray": "#b0b0b0",
     "selectedBg": "#d0d0e0",
-    "userMsgBg": "#e8e8e8",
+    "userMsgBg": "#e6ebf2",
 
     "toolPendingBg": "#eef3fb",
     "toolSuccessBg": "#eff7f1",
     "toolErrorBg": "#fdeef0",
 
-    "customMsgBg": "#ede7f6"
+    "customMsgBg": "#edf1f9"
   },
   "colors": {
     "accent": "teal",
@@ -39,7 +39,7 @@
     "userMessageText": "text",
     "customMessageBg": "customMsgBg",
     "customMessageText": "text",
-    "customMessageLabel": "#7e57c2",
+    "customMessageLabel": "teal",
 
     "toolPendingBg": "toolPendingBg",
     "toolSuccessBg": "toolSuccessBg",
