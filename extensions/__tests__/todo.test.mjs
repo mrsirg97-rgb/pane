@@ -1330,3 +1330,164 @@ test("details carry the owner; foreign claims show in renders", async () => {
   assert.equal(task.owner, "sess-a");
   assert.match(textOf(read), /claimed by sess-a/);
 });
+
+// ---- compaction ----
+/** Age the log past the compaction threshold with ghost events (no-op starts). */
+function ageLog(cwd) {
+  const db = openDb(cwd);
+  const insert = db.prepare(
+    "INSERT INTO events (op, args, session) VALUES ('start', ?, NULL)",
+  );
+  const ghost = JSON.stringify({ id: "t999" });
+  for (let i = 0; i < todoMod.COMPACT_THRESHOLD_EVENTS + 10; i++)
+    insert.run(ghost);
+  db.close();
+}
+
+test("a mutation past the threshold compacts: log collapses to snapshot + mutation", async () => {
+  const cwd = join(scratch, "ws54");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await tool.execute("t178", {
+    action: "create",
+    tasks: [{ text: "alpha" }, { text: "beta" }],
+  });
+  ageLog(cwd);
+  const bId = idOf("beta", textOf(await tool.execute("t179", { action: "read" })));
+  await tool.execute("t180", { action: "start", id: bId });
+  const rows = eventRows(cwd);
+  assert.equal(rows.length, 2); // bounded: compact + the mutation
+  assert.equal(rows[0].op, "compact");
+  assert.equal(rows[1].op, "start");
+  assert.equal(rows[0].session, "anon"); // attributed to the caller
+  // projection is intact: beta in_progress, alpha pending, dense positions
+  const proj = projRows(cwd);
+  assert.deepEqual(
+    proj.map((t) => t.text),
+    ["alpha", "beta"],
+  );
+  assert.equal(proj.find((t) => t.text === "beta").status, "in_progress");
+});
+
+test("the compact snapshot is a full pre-mutation capture", async () => {
+  const cwd = join(scratch, "ws55");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await tool.execute("t181", {
+    action: "create",
+    tasks: [{ text: "alpha" }, { text: "beta" }],
+  });
+  ageLog(cwd);
+  const bId = idOf("beta", textOf(await tool.execute("t182", { action: "read" })));
+  await tool.execute("t183", { action: "start", id: bId });
+  const rows = eventRows(cwd);
+  const snap = JSON.parse(rows[0].args).tasks;
+  assert.equal(snap.length, 2);
+  const alpha = snap.find((t) => t.text === "alpha");
+  const beta = snap.find((t) => t.text === "beta");
+  assert.equal(alpha.status, "pending"); // pre-mutation state
+  assert.equal(beta.status, "pending");
+  assert.deepEqual([alpha.pos, beta.pos], [0, 1]); // positions carried
+  assert.equal(alpha.owner, null);
+});
+
+test("replay reproduces the queue after compaction; tamper self-heals", async () => {
+  const cwd = join(scratch, "ws56");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await tool.execute("t184", {
+    action: "create",
+    tasks: [{ text: "alpha" }, { text: "beta" }],
+  });
+  ageLog(cwd);
+  const bId = idOf("beta", textOf(await tool.execute("t185", { action: "read" })));
+  await tool.execute("t186", { action: "start", id: bId });
+  // scramble the projection; events unchanged
+  const db = openDb(cwd);
+  db.exec("UPDATE tasks SET pos = 99 - pos");
+  db.exec("DELETE FROM tasks WHERE text = 'beta'");
+  db.close();
+  const read = await tool.execute("t187", { action: "read" });
+  const proj = projRows(cwd);
+  assert.deepEqual(
+    proj.map((t) => t.text),
+    ["alpha", "beta"],
+  );
+  assert.equal(proj.find((t) => t.text === "beta").status, "in_progress");
+  assert.equal(read.isError, undefined);
+});
+
+test("claims survive compaction (owner rides the snapshot)", async () => {
+  const cwd = join(scratch, "ws57");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await call("t188", { action: "create", tasks: [{ text: "claimed" }] }, sessA);
+  const id = idOf(
+    "claimed",
+    textOf(await call("t189", { action: "read" }, sessA)),
+  );
+  await call("t190", { action: "start", id }, sessA);
+  ageLog(cwd); // the start event will be compacted away
+  await assert.rejects(
+    () => call("t191", { action: "complete", id }, sessB),
+    /claimed by sess-a/,
+  );
+});
+
+test("moves and dependencies survive compaction", async () => {
+  const cwd = join(scratch, "ws58");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const created = await tool.execute("t192", {
+    action: "create",
+    tasks: [{ text: "root" }, { text: "leaf", dependsOn: "root" }],
+  });
+  const leafId = idOf("leaf", textOf(created));
+  await tool.execute("t193", { action: "move", id: leafId, pos: 1 });
+  ageLog(cwd);
+  const read = await tool.execute("t194", { action: "read" });
+  assert.equal(read.isError, undefined);
+  const proj = projRows(cwd);
+  assert.deepEqual(
+    proj.map((t) => t.text),
+    ["leaf", "root"],
+  );
+  const rootId = proj.find((t) => t.text === "root").id;
+  assert.equal(proj.find((t) => t.text === "leaf").depends_on, rootId);
+});
+
+test("staleness epoch resets after compaction; the footer still fires", async () => {
+  const cwd = join(scratch, "ws59");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await tool.execute("t195", { action: "create", tasks: [{ text: "ancient" }] });
+  ageLog(cwd);
+  const id = idOf(
+    "ancient",
+    textOf(await tool.execute("t196", { action: "read" })),
+  );
+  await tool.execute("t197", { action: "start", id }); // triggers compact
+  // age the fresh epoch past the staleness threshold
+  const db = openDb(cwd);
+  const insert = db.prepare(
+    "INSERT INTO events (op, args, session) VALUES ('start', ?, NULL)",
+  );
+  for (let i = 0; i < todoMod.STALE_THRESHOLD_SEQ + 10; i++)
+    insert.run(JSON.stringify({ id: "t999" }));
+  db.close();
+  const stale = await tool.execute("t198", { action: "read" });
+  assert.match(textOf(stale), /1 unresolved since/);
+});
+
+test("read never compacts", async () => {
+  const cwd = join(scratch, "ws60");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await tool.execute("t199", { action: "create", tasks: [{ text: "quiet" }] });
+  ageLog(cwd);
+  const before = eventRows(cwd).length;
+  const read = await tool.execute("t200", { action: "read" });
+  assert.equal(read.isError, undefined);
+  assert.equal(eventRows(cwd).length, before); // nothing appended
+  assert.equal(eventRows(cwd).some((r) => r.op === "compact"), false);
+});

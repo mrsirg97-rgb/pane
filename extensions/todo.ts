@@ -15,6 +15,12 @@ const DIR = join(homedir(), ".pi/agent/todos");
  *  this many events behind the latest seq is "stale". ~24h of activity. */
 export const STALE_THRESHOLD_SEQ = 200;
 
+/** Event log compaction threshold: a mutation that pushes the log past this
+ *  count snapshots the queue into a compact event and deletes the old log,
+ *  so replay cost and file growth stay bounded. Staleness epochs reset at
+ *  each compaction (the checkpoint date becomes the footer's anchor). */
+export const COMPACT_THRESHOLD_EVENTS = 1000;
+
 type Status = "pending" | "in_progress" | "done" | "failed";
 type Task = {
   id: string;
@@ -56,7 +62,7 @@ CREATE TABLE IF NOT EXISTS meta (
 CREATE TABLE IF NOT EXISTS events (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-  op TEXT NOT NULL CHECK (op IN ('create', 'start', 'complete', 'fail', 'retry', 'move')),
+  op TEXT NOT NULL CHECK (op IN ('create', 'start', 'complete', 'fail', 'retry', 'move', 'compact')),
   args TEXT NOT NULL,
   session TEXT
 );
@@ -116,7 +122,8 @@ function replay(db: DatabaseSync): Map<string, StoredTask> {
   return map;
 }
 
-type Op = "create" | "start" | "complete" | "fail" | "retry" | "move";
+type Op =
+  "create" | "start" | "complete" | "fail" | "retry" | "move" | "compact";
 
 type PlannedRow = {
   text: string;
@@ -266,6 +273,10 @@ function applyEvent(
     applyCreate(map, seq, planCreate(map, incoming));
     return;
   }
+  if (op === "compact") {
+    applyCompact(map, seq, args);
+    return;
+  }
 
   const id = typeof args.id === "string" ? args.id : "";
   const t = map.get(id);
@@ -289,6 +300,103 @@ function applyEvent(
   } else if (op === "move") {
     applyMove(map, seq, args);
   }
+}
+
+/** Apply a compact snapshot: the log's history is replaced by this single
+ *  event, so it must reproduce the full queue. Rows are applied best-effort
+ *  (bad rows skipped), the epoch resets (created_seq = updated_seq = seq),
+ *  and dangling dependency links are dropped like create does. */
+function applyCompact(
+  map: Map<string, StoredTask>,
+  seq: number,
+  args: { tasks?: unknown },
+) {
+  map.clear();
+  const raw = Array.isArray(args.tasks) ? args.tasks : [];
+  const rows: {
+    id: string;
+    text: string;
+    status: Status;
+    dependsOn: string | null;
+    pos: number;
+    owner: string | null;
+  }[] = [];
+  for (const entry of raw) {
+    const r = entry as {
+      id?: unknown;
+      text?: unknown;
+      status?: unknown;
+      dependsOn?: unknown;
+      pos?: unknown;
+      owner?: unknown;
+    };
+    const id = typeof r.id === "string" ? r.id : "";
+    const text = typeof r.text === "string" ? r.text : "";
+    if (!id || !text) continue;
+    const status =
+      r.status === "pending" ||
+      r.status === "in_progress" ||
+      r.status === "done" ||
+      r.status === "failed"
+        ? r.status
+        : "pending";
+    const pos = typeof r.pos === "number" ? r.pos : 0;
+    rows.push({
+      id,
+      text,
+      status,
+      dependsOn: typeof r.dependsOn === "string" ? r.dependsOn : null,
+      pos,
+      owner: typeof r.owner === "string" ? r.owner : null,
+    });
+  }
+  for (const row of rows) {
+    map.set(row.id, {
+      id: row.id,
+      text: row.text,
+      status: row.status,
+      dependsOn: row.dependsOn,
+      pos: row.pos,
+      created_seq: seq,
+      updated_seq: seq,
+      owner: row.owner,
+    });
+  }
+  for (const row of rows) {
+    const t = map.get(row.id);
+    if (t && row.dependsOn && !map.has(row.dependsOn)) t.dependsOn = null;
+  }
+}
+
+/** Snapshot the queue into a compact event and delete the older log: the
+ *  projection's seq anchors reset to the snapshot's epoch, so the table
+ *  rows always reference surviving events. Caller owns the transaction. */
+function compact(
+  db: DatabaseSync,
+  map: Map<string, StoredTask>,
+  session: string,
+) {
+  const ordered = [...map.values()].sort(
+    (a, b) => a.pos - b.pos || a.created_seq - b.created_seq,
+  );
+  const tasks = ordered.map((t) => ({
+    id: t.id,
+    text: t.text,
+    status: t.status,
+    dependsOn: t.dependsOn,
+    pos: t.pos,
+    owner: t.owner,
+  }));
+  const append = db
+    .prepare("INSERT INTO events (op, args, session) VALUES ('compact', ?, ?)")
+    .run(JSON.stringify({ tasks }), session);
+  const seq = Number(append.lastInsertRowid);
+  for (const t of map.values()) {
+    t.created_seq = seq;
+    t.updated_seq = seq;
+  }
+  persist(db, map); // rewrite the projection first: its seq refs must survive the delete
+  db.prepare("DELETE FROM events WHERE seq < ?").run(seq);
 }
 
 /** Apply a move event: repositions the task at the 1-based rank given in the
@@ -466,6 +574,8 @@ export default function todoExtension(pi: ExtensionAPI) {
       "minted as events, never updated in place. " +
       "events record the claiming session; start claims, complete by a foreign session refuses " +
       "(fail it first to take over), fail frees the claim. " +
+      "the event log auto-compacts past 1000 events: a full-state snapshot replaces history " +
+      "(staleness epochs reset), replay stays exact. " +
       "every mutation returns the full queue. ids are minted by the tool; copy, never invent.",
     promptSnippet: "Track and update a task queue for multi-step work",
     promptGuidelines: [
@@ -550,6 +660,17 @@ export default function todoExtension(pi: ExtensionAPI) {
             const action = params.action;
             const session = currentSession(ctx);
             const map = replay(db);
+
+            // Bounded log: a mutation that crosses the threshold snapshots the
+            // queue first (pre-mutation state), then the mutation event follows.
+            // Reads never append, so they never trigger compaction.
+            if (action !== "read") {
+              const count = db
+                .prepare("SELECT COUNT(*) AS c FROM events")
+                .get() as { c: number };
+              if (count.c >= COMPACT_THRESHOLD_EVENTS)
+                compact(db, map, session);
+            }
 
             const reply = (note?: string) => {
               const ordered = [...map.values()].sort(
