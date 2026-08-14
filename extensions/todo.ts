@@ -23,11 +23,13 @@ type Task = {
   dependsOn: string | null;
 };
 /** Render/reply shape: blockedBy is derived at reply time, never stored. */
-type TaskView = Task & { blockedBy: string | null };
+type TaskView = Task & { blockedBy: string | null; owner: string | null };
 type StoredTask = Task & {
   pos: number;
   created_seq: number;
   updated_seq: number;
+  /** Session that started this in_progress task, derived from the log. */
+  owner: string | null;
 };
 
 const ACTION = StringEnum([
@@ -89,11 +91,12 @@ function storeOpts(): { path: string; schema: string; policy: "delete" } {
 function replay(db: DatabaseSync): Map<string, StoredTask> {
   const map = new Map<string, StoredTask>();
   const events = db
-    .prepare("SELECT seq, op, args FROM events ORDER BY seq")
+    .prepare("SELECT seq, op, args, session FROM events ORDER BY seq")
     .all() as {
     seq: number;
     op: string;
     args: string;
+    session: string | null;
   }[];
   for (const ev of events) {
     let args: {
@@ -108,7 +111,7 @@ function replay(db: DatabaseSync): Map<string, StoredTask> {
     } catch {
       continue; // corrupt row: skip, never fatal
     }
-    applyEvent(map, ev.seq, ev.op as Op, args);
+    applyEvent(map, ev.seq, ev.op as Op, args, ev.session);
   }
   return map;
 }
@@ -192,6 +195,7 @@ function applyCreate(map: Map<string, StoredTask>, seq: number, plan: Plan) {
       pos: row.pos,
       created_seq: seq,
       updated_seq: seq,
+      owner: null,
     });
   }
   for (const row of plan.rows) {
@@ -251,6 +255,7 @@ function applyEvent(
   seq: number,
   op: Op,
   args: { tasks?: { text?: unknown; dependsOn?: unknown }[]; id?: string },
+  session?: string | null,
 ) {
   if (op === "create") {
     const incoming = args.tasks ?? [];
@@ -267,15 +272,19 @@ function applyEvent(
   if (!t) return; // unknown id: no-op on replay
   if (op === "start" && t.status === "pending") {
     t.status = "in_progress";
+    t.owner = session ?? null;
     t.updated_seq = seq;
   } else if (op === "complete" && t.status === "in_progress") {
     t.status = "done";
+    t.owner = null;
     t.updated_seq = seq;
   } else if (op === "fail" && t.status === "in_progress") {
     t.status = "failed";
+    t.owner = null;
     t.updated_seq = seq;
   } else if (op === "retry" && t.status === "failed") {
     t.status = "pending";
+    t.owner = null;
     t.updated_seq = seq;
   } else if (op === "move") {
     applyMove(map, seq, args);
@@ -373,6 +382,20 @@ function fail(message: string): never {
   throw new Error(`todo: ${message}`);
 }
 
+/** The session id for attribution and claims, or "anon" when unknown. */
+function currentSession(ctx?: {
+  sessionManager?: { getSessionId?: () => string };
+}): string {
+  const id = ctx?.sessionManager?.getSessionId?.();
+  return typeof id === "string" && id.length ? id : "anon";
+}
+
+/** Suffix for a task claimed by a foreign session: who owns it, truncated. */
+function claimSuffix(t: TaskView, session: string): string {
+  if (t.status !== "in_progress" || !t.owner || t.owner === session) return "";
+  return ` · claimed by ${t.owner.slice(0, 8)}`;
+}
+
 const TASK_GLYPH: Record<Status, [string, string]> = {
   pending: ["○", "dim"],
   in_progress: ["◐", "accent"],
@@ -380,7 +403,7 @@ const TASK_GLYPH: Record<Status, [string, string]> = {
   failed: ["✕", "error"],
 };
 
-function renderQueue(theme: any, tasks: TaskView[]): string {
+function renderQueue(theme: any, tasks: TaskView[], session: string): string {
   if (!tasks.length) return theme.fg("dim", "(no tasks)");
   const done = tasks.filter((t) => t.status === "done").length;
   const next = tasks.find((t) => t.status === "pending" && !t.blockedBy);
@@ -404,12 +427,13 @@ function renderQueue(theme: any, tasks: TaskView[]): string {
     const waits = t.blockedBy
       ? theme.fg("dim", ` · waits on ${t.blockedBy}`)
       : "";
-    return `${theme.fg(color, glyph)} ${theme.fg("dim", t.id)} ${text}${waits}`;
+    const claim = claimSuffix(t, session);
+    return `${theme.fg(color, glyph)} ${theme.fg("dim", t.id)} ${text}${waits}${claim}`;
   });
   return [head, ...rows].join("\n");
 }
 
-function render(tasks: TaskView[]): string {
+function render(tasks: TaskView[], session: string): string {
   if (!tasks.length) return "(no tasks)";
   const done = tasks.filter((t) => t.status === "done").length;
   const failed = tasks.filter((t) => t.status === "failed").length;
@@ -417,7 +441,8 @@ function render(tasks: TaskView[]): string {
   const lines = tasks.map(
     (t) =>
       `  ${t.id} ${MARK[t.status]} ${t.text}` +
-      (t.blockedBy ? ` · waits on ${t.blockedBy}` : ""),
+      (t.blockedBy ? ` · waits on ${t.blockedBy}` : "") +
+      claimSuffix(t, session),
   );
   const head =
     `${done}/${tasks.length} done` +
@@ -439,6 +464,8 @@ export default function todoExtension(pi: ExtensionAPI) {
       "several tasks may be in flight; batched transitions apply in order, each against fresh state. " +
       "move reorders the queue: action='move' id + pos (1-based queue position); positions are " +
       "minted as events, never updated in place. " +
+      "events record the claiming session; start claims, complete by a foreign session refuses " +
+      "(fail it first to take over), fail frees the claim. " +
       "every mutation returns the full queue. ids are minted by the tool; copy, never invent.",
     promptSnippet: "Track and update a task queue for multi-step work",
     promptGuidelines: [
@@ -493,11 +520,15 @@ export default function todoExtension(pi: ExtensionAPI) {
             : undefined;
       return header(theme, ctx, "todo", detail);
     },
-    renderResult(result, _options, theme, _ctx) {
+    renderResult(result, _options, theme, ctx) {
       if (result.isError) return errorText(theme, result);
       const tasks =
         (result.details as { tasks?: TaskView[] } | undefined)?.tasks ?? [];
-      return new Text(indent(renderQueue(theme, tasks)), 0, 0);
+      return new Text(
+        indent(renderQueue(theme, tasks, currentSession(ctx))),
+        0,
+        0,
+      );
     },
     prepareArguments(args) {
       if (!args || typeof args !== "object") return args;
@@ -510,13 +541,14 @@ export default function todoExtension(pi: ExtensionAPI) {
       }
       return args;
     },
-    async execute(_toolCallId, params: any) {
+    async execute(_toolCallId, params: any, _signal, _onUpdate, ctx) {
       return withLog(() =>
         withStore(
           storeOpts(),
           (db) => db,
           (db) => {
             const action = params.action;
+            const session = currentSession(ctx);
             const map = replay(db);
 
             const reply = (note?: string) => {
@@ -529,9 +561,10 @@ export default function todoExtension(pi: ExtensionAPI) {
                 status: t.status,
                 dependsOn: t.dependsOn,
                 blockedBy: blockedBy(map, t),
+                owner: t.owner,
               }));
               const footer = staleFooter(db);
-              const text = [note && `→ ${note}`, render(tasks), footer]
+              const text = [note && `→ ${note}`, render(tasks, session), footer]
                 .filter(Boolean)
                 .join("\n");
               return {
@@ -553,9 +586,9 @@ export default function todoExtension(pi: ExtensionAPI) {
               validateDeps(map, plan);
               const append = db
                 .prepare(
-                  "INSERT INTO events (op, args, session) VALUES ('create', ?, NULL)",
+                  "INSERT INTO events (op, args, session) VALUES ('create', ?, ?)",
                 )
-                .run(JSON.stringify({ tasks: incoming }));
+                .run(JSON.stringify({ tasks: incoming }), session);
               applyEvent(map, Number(append.lastInsertRowid), "create", {
                 tasks: incoming,
               });
@@ -578,9 +611,9 @@ export default function todoExtension(pi: ExtensionAPI) {
               }
               const append = db
                 .prepare(
-                  "INSERT INTO events (op, args, session) VALUES ('move', ?, NULL)",
+                  "INSERT INTO events (op, args, session) VALUES ('move', ?, ?)",
                 )
-                .run(JSON.stringify({ id, pos }));
+                .run(JSON.stringify({ id, pos }), session);
               applyEvent(map, Number(append.lastInsertRowid), "move", {
                 id,
                 pos,
@@ -591,14 +624,17 @@ export default function todoExtension(pi: ExtensionAPI) {
 
             if (action === "start") {
               if (t.status === "in_progress")
-                fail(`'${id}' is already in progress`);
+                fail(
+                  `'${id}' is already in progress` +
+                    (t.owner ? ` (claimed by ${t.owner})` : ""),
+                );
               if (t.status === "done") fail(`'${id}' is done; read-only`);
               if (t.status === "failed") fail(`'${id}' failed; retry it first`);
               const append = db
                 .prepare(
-                  "INSERT INTO events (op, args, session) VALUES ('start', ?, NULL)",
+                  "INSERT INTO events (op, args, session) VALUES ('start', ?, ?)",
                 )
-                .run(JSON.stringify({ id }));
+                .run(JSON.stringify({ id }), session);
               applyEvent(map, Number(append.lastInsertRowid), "start", { id });
               persist(db, map);
               return reply(`'${id}' started`);
@@ -609,6 +645,11 @@ export default function todoExtension(pi: ExtensionAPI) {
                 fail(`'${id}' is pending; start it first`);
               if (t.status === "done") fail(`'${id}' is done; read-only`);
               if (t.status === "failed") fail(`'${id}' failed; retry it first`);
+              if (t.owner && t.owner !== session) {
+                fail(
+                  `'${id}' is claimed by ${t.owner}; fail it first to take over`,
+                );
+              }
               const depId = t.dependsOn;
               const blocker = depId ? find(map, depId) : undefined;
               if (blocker && blocker.status !== "done") {
@@ -622,9 +663,9 @@ export default function todoExtension(pi: ExtensionAPI) {
               }
               const append = db
                 .prepare(
-                  "INSERT INTO events (op, args, session) VALUES ('complete', ?, NULL)",
+                  "INSERT INTO events (op, args, session) VALUES ('complete', ?, ?)",
                 )
-                .run(JSON.stringify({ id }));
+                .run(JSON.stringify({ id }), session);
               applyEvent(map, Number(append.lastInsertRowid), "complete", {
                 id,
               });
@@ -637,23 +678,28 @@ export default function todoExtension(pi: ExtensionAPI) {
                 fail(`'${id}' is pending; start it first`);
               if (t.status === "done") fail(`'${id}' is done; read-only`);
               if (t.status === "failed") fail(`'${id}' is already failed`);
+              const released = t.owner && t.owner !== session ? t.owner : null;
               const append = db
                 .prepare(
-                  "INSERT INTO events (op, args, session) VALUES ('fail', ?, NULL)",
+                  "INSERT INTO events (op, args, session) VALUES ('fail', ?, ?)",
                 )
-                .run(JSON.stringify({ id }));
+                .run(JSON.stringify({ id }), session);
               applyEvent(map, Number(append.lastInsertRowid), "fail", { id });
               persist(db, map);
-              return reply(`'${id}' failed`);
+              return reply(
+                released
+                  ? `'${id}' failed (released from ${released})`
+                  : `'${id}' failed`,
+              );
             }
 
             if (t.status !== "failed")
               fail(`'${id}' is not failed; nothing to retry`);
             const append = db
               .prepare(
-                "INSERT INTO events (op, args, session) VALUES ('retry', ?, NULL)",
+                "INSERT INTO events (op, args, session) VALUES ('retry', ?, ?)",
               )
-              .run(JSON.stringify({ id }));
+              .run(JSON.stringify({ id }), session);
             applyEvent(map, Number(append.lastInsertRowid), "retry", { id });
             persist(db, map);
             return reply(`'${id}' back to pending`);

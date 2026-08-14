@@ -1194,3 +1194,139 @@ test("sequential moves compose deterministically", async () => {
     ["d", "b", "c", "a"],
   );
 });
+
+// ---- ownership/claim: session attribution ----
+const sessA = { sessionManager: { getSessionId: () => "sess-a" } };
+const sessB = { sessionManager: { getSessionId: () => "sess-b" } };
+const call = (id, params, ctx) =>
+  tool.execute(id, params, undefined, undefined, ctx);
+
+test("every mutation event records the session that caused it", async () => {
+  const cwd = join(scratch, "ws46");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await call("t141", { action: "create", tasks: [{ text: "a" }] }, sessA);
+  const id = idOf("a", textOf(await call("t142", { action: "read" }, sessA)));
+  await call("t143", { action: "start", id }, sessA);
+  const rows = eventRows(cwd);
+  assert.equal(rows[0].session, "sess-a");
+  assert.equal(rows[1].session, "sess-a");
+});
+
+test("anonymous calls (no ctx) record 'anon' and never claim-lock", async () => {
+  const cwd = join(scratch, "ws47");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  const created = await tool.execute("t144", {
+    action: "create",
+    tasks: [{ text: "anon work" }],
+  });
+  const id = idOf("anon work", textOf(created));
+  await tool.execute("t145", { action: "start", id });
+  const rows = eventRows(cwd);
+  assert.equal(rows[1].session, "anon");
+  // anon completing anon-started work: no claim refusal
+  const done = await tool.execute("t146", { action: "complete", id });
+  assert.equal(done.isError, undefined);
+});
+
+// ---- ownership/claim: enforcement ----
+test("complete by a foreign session refuses with the claimer", async () => {
+  const cwd = join(scratch, "ws48");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await call("t147", { action: "create", tasks: [{ text: "shared" }] }, sessA);
+  const id = idOf(
+    "shared",
+    textOf(await call("t148", { action: "read" }, sessA)),
+  );
+  await call("t149", { action: "start", id }, sessA);
+  await assert.rejects(
+    () => call("t150", { action: "complete", id }, sessB),
+    /claimed by sess-a; fail it first to take over/,
+  );
+  // nothing landed: still in_progress, owned by A
+  const rows = projRows(cwd);
+  assert.equal(rows.find((t) => t.id === id).status, "in_progress");
+});
+
+test("start by a foreign session refuses and names the claimer", async () => {
+  const cwd = join(scratch, "ws49");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await call("t151", { action: "create", tasks: [{ text: "claimed" }] }, sessA);
+  const id = idOf("claimed", textOf(await call("t152", { action: "read" }, sessA)));
+  await call("t153", { action: "start", id }, sessA);
+  await assert.rejects(
+    () => call("t154", { action: "start", id }, sessB),
+    /claimed by sess-a/,
+  );
+});
+
+test("fail is the takeover path: foreign fail -> retry -> start -> complete", async () => {
+  const cwd = join(scratch, "ws50");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await call("t155", { action: "create", tasks: [{ text: "handoff" }] }, sessA);
+  const id = idOf("handoff", textOf(await call("t156", { action: "read" }, sessA)));
+  await call("t157", { action: "start", id }, sessA);
+  // B takes over: fail is allowed from anyone
+  const failed = await call("t158", { action: "fail", id }, sessB);
+  assert.equal(failed.isError, undefined);
+  assert.match(textOf(failed), /released from sess-a/);
+  await call("t159", { action: "retry", id }, sessB);
+  await call("t160", { action: "start", id }, sessB);
+  const done = await call("t161", { action: "complete", id }, sessB);
+  assert.equal(done.isError, undefined);
+  assert.match(textOf(done), /\[x\] handoff/);
+  const rows = projRows(cwd);
+  assert.equal(rows.find((t) => t.id === id).status, "done");
+});
+
+test("owner is derived from the log, not the projection", async () => {
+  const cwd = join(scratch, "ws51");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await call("t162", { action: "create", tasks: [{ text: "ownership" }] }, sessA);
+  const id = idOf("ownership", textOf(await call("t163", { action: "read" }, sessA)));
+  await call("t164", { action: "start", id }, sessA);
+  // wipe the projection: a read rebuilds it, and the claim must survive
+  const db = openDb(cwd);
+  db.exec("DELETE FROM tasks");
+  db.close();
+  const read = await call("t165", { action: "read" }, sessB);
+  assert.equal(read.isError, undefined);
+  await assert.rejects(
+    () => call("t166", { action: "complete", id }, sessB),
+    /claimed by sess-a/,
+  );
+});
+
+test("failed tasks carry no owner; any session may retry", async () => {
+  const cwd = join(scratch, "ws52");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await call("t167", { action: "create", tasks: [{ text: "bail" }] }, sessA);
+  const id = idOf("bail", textOf(await call("t168", { action: "read" }, sessA)));
+  await call("t169", { action: "start", id }, sessA);
+  await call("t170", { action: "fail", id }, sessB); // free fail
+  // B's complete after retry+start must not hit a claim refusal
+  await call("t171", { action: "retry", id }, sessB);
+  await call("t172", { action: "start", id }, sessB);
+  const done = await call("t173", { action: "complete", id }, sessB);
+  assert.equal(done.isError, undefined);
+});
+
+test("details carry the owner; foreign claims show in renders", async () => {
+  const cwd = join(scratch, "ws53");
+  mkdirSync(cwd, { recursive: true });
+  use(cwd);
+  await call("t174", { action: "create", tasks: [{ text: "watched" }] }, sessA);
+  const id = idOf("watched", textOf(await call("t175", { action: "read" }, sessA)));
+  await call("t176", { action: "start", id }, sessA);
+  const read = await call("t177", { action: "read" }, sessB);
+  const d = read.details;
+  const task = d.tasks.find((t) => t.id === id);
+  assert.equal(task.owner, "sess-a");
+  assert.match(textOf(read), /claimed by sess-a/);
+});
