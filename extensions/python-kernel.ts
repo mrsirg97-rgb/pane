@@ -69,15 +69,19 @@ type Reply = {
   err?: string;
   result?: string | null;
   error?: string | null;
+  note?: string;
 };
 
 export class Kernel {
+  constructor(private opts: { python?: string; host?: string } = {}) {}
+
   private proc: ChildProcessWithoutNullStreams | null = null;
   private buf = "";
   private stderrTail = "";
   private pending = new Map<string, (r: Reply) => void>();
   private seq = 0;
   private queue: Promise<void> = Promise.resolve();
+  private lastDeath: { desc: string; stderr: string } | null = null;
 
   private failAll(message: string) {
     for (const [, resolve] of this.pending) {
@@ -86,8 +90,23 @@ export class Kernel {
     this.pending.clear();
   }
 
+  private takeDeathNote(): string | null {
+    const d = this.lastDeath;
+    if (!d) return null;
+    this.lastDeath = null;
+    const stderr = d.stderr ? `\n[stderr]\n${d.stderr}` : "";
+    return (
+      `note: fresh kernel; previous kernel exited (${d.desc}); ` +
+      `all previous variables are gone${stderr}`
+    );
+  }
+
   private start() {
-    const proc = spawn(KERNEL_PYTHON, [KERNEL_HOST], {
+    this.buf = "";
+    this.stderrTail = "";
+    const proc = spawn(this.opts.python ?? KERNEL_PYTHON, [
+      this.opts.host ?? KERNEL_HOST,
+    ], {
       stdio: ["pipe", "pipe", "pipe"],
     });
     proc.stdout.setEncoding("utf8");
@@ -118,11 +137,13 @@ export class Kernel {
       this.failAll(`kernel failed to start: ${err.message}`);
       this.proc = null;
     });
-    proc.on("exit", (code) => {
+    proc.on("exit", (code, signal) => {
       if (!isCurrent()) return;
       const tail = this.stderrTail.trim();
+      const desc = signal ? `signal ${signal}` : `code ${code}`;
+      this.lastDeath = { desc, stderr: tail };
       this.failAll(
-        `kernel exited (code ${code})` + (tail ? `\n[stderr]\n${tail}` : ""),
+        `kernel exited (${desc})` + (tail ? `\n[stderr]\n${tail}` : ""),
       );
       this.proc = null;
     });
@@ -133,8 +154,6 @@ export class Kernel {
   private teardown(message: string) {
     const proc = this.proc;
     this.proc = null;
-    this.buf = "";
-    this.stderrTail = "";
     this.failAll(message);
     proc?.kill("SIGKILL");
   }
@@ -166,7 +185,9 @@ export class Kernel {
     payload: Record<string, unknown>,
     timeoutMs: number,
   ): Promise<Reply> {
+    let note: string | null = null;
     if (!this.proc) {
+      note = this.takeDeathNote();
       try {
         await ensureKernel();
       } catch (err) {
@@ -174,6 +195,7 @@ export class Kernel {
           id: null,
           ok: false,
           error: err instanceof Error ? err.message : String(err),
+          note: note ?? undefined,
         };
       }
       this.start();
@@ -195,20 +217,21 @@ export class Kernel {
           id,
           ok: false,
           error:
-            `timed out after ${Math.round(timeoutMs / 1000)}s; kernel was restarted ` +
-            `and all variables are gone. Re-run setup, or pass a larger timeoutMs.`,
+            `timed out after ${Math.round(timeoutMs / 1000)}s; kernel will be restarted ` +
+            `on the next call; all variables are gone. Re-run setup, or pass a larger timeoutMs.`,
         });
         this.restart();
       }, timeoutMs);
     });
     const reply = await Promise.race([wait, timeout]);
     clearTimeout(timer!);
-    return reply;
+    return note ? { ...reply, note } : reply;
   }
 }
 
 function render(r: Reply): string {
   const parts: string[] = [];
+  if (r.note?.trim()) parts.push(r.note.trimEnd());
   if (r.out?.trim()) parts.push(r.out.trimEnd());
   if (r.err?.trim()) parts.push(`[stderr]\n${r.err.trimEnd()}`);
   if (r.error) parts.push(`[error]\n${r.error}`);
