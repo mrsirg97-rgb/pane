@@ -10,11 +10,11 @@
 // non-zero (cron mails stderr).
 
 import { DatabaseSync } from "node:sqlite";
-import { execFile } from "node:child_process";
-import { homedir } from "node:os";
+import { execFile, spawn } from "node:child_process";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS events (
@@ -327,26 +327,53 @@ function realCrontabShim(bin) {
   };
 }
 
-function realSpawn(piBin) {
+export function realSpawn(_piBin) {
   const timeoutMs = Number(process.env.PANE_RUN_TIMEOUT_MS ?? 1000 * 60 * 30);
   return (argv, { cwd }) =>
     new Promise((resolveP) => {
-      execFile(
-        argv[0],
-        argv.slice(1),
-        { cwd, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 },
-        (err, stdout, stderr) => {
-          const exit = err ? (typeof err.code === "number" ? err.code : 1) : 0;
-          const note = err?.killed
-            ? `\n[runner: killed after ${timeoutMs}ms timeout]\n`
-            : "";
-          resolveP({
-            exit,
-            stdout: String(stdout ?? ""),
-            stderr: String(stderr ?? "") + note,
-          });
-        },
-      );
+      // stdio discipline: the worker's fd0/1/2 must be FILES redirected by
+      // the SHELL. pi (node/uv) deadlocks before first output under
+      // uv-mediated spawn stdio in this environment (reproduced: uv-spawn
+      // shapes hang indefinitely; the identical invocation through
+      // shell-redirected file stdio completes in seconds). stdin: /dev/null.
+      const stamp = `${process.pid}-${Date.now()}`;
+      const tmpOut = join(tmpdir(), `pane-run-out-${stamp}`);
+      const tmpErr = join(tmpdir(), `pane-run-err-${stamp}`);
+      const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
+      const cmd = `exec 0</dev/null 1>${q(tmpOut)} 2>${q(tmpErr)} ${q(argv[0])} ${argv
+        .slice(1)
+        .map(q)
+        .join(" ")}`;
+      const child = spawn("/bin/sh", ["-c", cmd], {
+        cwd,
+        env: { ...process.env, TMPDIR: tmpdir() },
+      });
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        try {
+          child.kill("SIGKILL");
+        } catch {}
+      }, timeoutMs);
+      child.on("close", (code, signal) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const killed = signal === "SIGKILL" && code === null;
+        let out = "";
+        let errT = "";
+        try {
+          out = readFileSync(tmpOut, "utf8");
+          errT = readFileSync(tmpErr, "utf8");
+        } catch {}
+        rmSync(tmpOut, { force: true });
+        rmSync(tmpErr, { force: true });
+        resolveP({
+          exit: killed ? 1 : (typeof code === "number" ? code : 1),
+          stdout: out,
+          stderr: errT + (killed ? `\n[runner: killed after timeout]\n` : ""),
+        });
+      });
     });
 }
 

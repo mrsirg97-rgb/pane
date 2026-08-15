@@ -424,6 +424,39 @@ test("logs prune to the newest 20", async () => {
 
 // ---- lock skip (engine level) ----
 
+test("realSpawn (file-stdio): completes where plumbing-stdio hangs", async () => {
+  const { execFileSync } = await import("node:child_process");
+  let hasPi = true;
+  try {
+    execFileSync("sh", ["-c", "command -v pi"], { stdio: "ignore" });
+  } catch {
+    hasPi = false;
+  }
+  if (!hasPi) {
+    console.log("# skip: no pi binary on PATH");
+    return;
+  }
+  const { scratchDir } = await import("./_test-helpers.mjs");
+  const spawn = runner.realSpawn("pi");
+  const t0 = Date.now();
+  const res = await spawn(
+    [
+      "pi",
+      "-p",
+      "reply with exactly: ok",
+      "--no-session",
+      "--thinking",
+      "medium",
+      "--model",
+      "qwen3.8-workers",
+    ],
+    { cwd: scratchDir() },
+  );
+  assert.equal(res.exit, 0);
+  assert.match(res.stdout, /ok/);
+  assert.ok(Date.now() - t0 < 120_000, "bounded, not wedged");
+}, 180_000);
+
 test("lock-skip records a skip without touching crontab or running pi", async () => {
   const { home, ct, key, dbPath } = await setup();
   const spawn = fakeSpawn();
