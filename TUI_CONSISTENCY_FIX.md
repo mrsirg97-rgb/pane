@@ -31,8 +31,11 @@ Update the message-surface tokens to match the tool boxes, in both variants:
   `toolOutput`.
 - Everything else stays untouched (no full palette re-derivation this round).
 
-Values (dark / light): `customMessageBg` `#20263a` / `#edf1f9`, `userMessageBg`
-`#272e43` / `#e6ebf2`, `customMessageLabel` `accent` / `accent`. User message
+Values (dark / light): `customMessageBg` `#202536` / `#edf1f9`, `userMessageBg`
+`#262c3c` / `#e6ebf2`, `customMessageLabel` `accent` / `accent`. Dark values
+revised in review: the first cut matched hue but ran chroma spread 28 vs the
+tool family's 21, reading as a blue box; prominence now comes from lightness
+at matched chroma (spread 22, avg 36 -> 41 -> 47), enforced by a chroma test. User message
 boxes stay one step more prominent than custom-message boxes, mirroring the
 stock ordering.
 
