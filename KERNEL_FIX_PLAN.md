@@ -1,6 +1,6 @@
 # SPEC: kernel_fix — loud death, clean respawn, honest timeout
 
-Status: planned (TDD). Implementation target: extensions/python-kernel.ts, tests in extensions/__tests__/python-kernel.test.mjs, one README line. No changes to kernel/kernel_host.py.
+Status: planned (TDD). Implementation target: extensions/python-kernel.ts, tests in extensions/**tests**/python-kernel.test.mjs, one README line. No changes to kernel/kernel_host.py.
 
 ## Problem
 

@@ -125,15 +125,20 @@ export function inToolFamily(bg, family, maxDelta = 30) {
 }
 
 test("hexToHue fails informatively on non-hex values (256-color numbers are legal theme values)", () => {
-  assert.throws(
-    () => hexToHue(39),
-    /expected a 6-digit hex color.*39/,
-  );
+  assert.throws(() => hexToHue(39), /expected a 6-digit hex color.*39/);
 });
 
 test("inToolFamily: achromatic edges", () => {
-  assert.equal(inToolFamily("#808080", "#404040"), true, "two grays share the neutral family");
-  assert.equal(inToolFamily("#1b2130", "#808080"), false, "one gray, one hue: no family");
+  assert.equal(
+    inToolFamily("#808080", "#404040"),
+    true,
+    "two grays share the neutral family",
+  );
+  assert.equal(
+    inToolFamily("#1b2130", "#808080"),
+    false,
+    "one gray, one hue: no family",
+  );
   assert.equal(inToolFamily("#808080", "#1b2130"), false, "symmetric");
 });
 
@@ -190,4 +195,3 @@ function channelSpread(hex) {
   const b = parseInt(hex.slice(5, 7), 16);
   return Math.max(r, g, b) - Math.min(r, g, b);
 }
-
