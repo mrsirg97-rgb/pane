@@ -3,6 +3,14 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { openDb, withLog, withStore } from "./sqlite.ts";
+import type {
+  Op,
+  PlannedRow,
+  Plan,
+  Status,
+  StoredTask,
+  TaskView,
+} from "./types/todo.types.ts";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -13,21 +21,6 @@ const DIR = join(homedir(), ".pi/agent/todos");
 
 export const STALE_THRESHOLD_SEQ = 200;
 export const COMPACT_THRESHOLD_EVENTS = 1000;
-
-type Status = "pending" | "in_progress" | "done" | "failed";
-type Task = {
-  id: string;
-  text: string;
-  status: Status;
-  dependsOn: string | null;
-};
-type TaskView = Task & { blockedBy: string | null; owner: string | null };
-type StoredTask = Task & {
-  pos: number;
-  created_seq: number;
-  updated_seq: number;
-  owner: string | null;
-};
 
 const ACTION = StringEnum([
   "create",
@@ -108,17 +101,6 @@ function replay(db: DatabaseSync): Map<string, StoredTask> {
   }
   return map;
 }
-
-type Op =
-  "create" | "start" | "complete" | "fail" | "retry" | "move" | "compact";
-
-type PlannedRow = {
-  text: string;
-  id: string;
-  pos: number;
-  dependsOn: string | null | undefined; // undefined: keep an existing link
-};
-type Plan = { rows: PlannedRow[]; problems: string[] };
 
 function planCreate(
   map: Map<string, StoredTask>,

@@ -10,6 +10,7 @@ import {
   preview,
   shortUrl,
 } from "./_render-kit.mjs";
+import type { Deps, Fetched, LookupFn } from "./types/web-fetch.types.ts";
 
 const PROXY_URL = process.env.PI_WEB_FETCH_PROXY ?? "http://127.0.0.1:8889";
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -19,24 +20,6 @@ const MAX_HOPS = 5;
 const TRAFILATURA = "trafilatura";
 const TEXTUAL =
   /^(text\/|application\/(json|xml|xhtml\+xml|rss\+xml|atom\+xml|[\w.-]+\+(json|xml))(\s*;|$))/i;
-
-type LookupFn = (
-  host: string,
-) => Promise<{ address: string; family: number }[]>;
-type Deps = {
-  fetchImpl?: typeof fetch;
-  lookup?: LookupFn;
-  trafilatura?: string | null;
-  maxBytes?: number;
-  timeoutMs?: number;
-};
-type Fetched = {
-  finalUrl: string;
-  status: number;
-  contentType: string;
-  body: string;
-  bodyTruncated: boolean;
-};
 
 export function ipIsPrivate(ip: string): boolean {
   const normalized = ip.toLowerCase();

@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { errorText, header, preview } from "./_render-kit.mjs";
+import type { Reply } from "./types/python-kernel.types.ts";
 
 const VENV_DIR = join(homedir(), ".pi/agent/kernel-venv");
 export const KERNEL_PYTHON = join(VENV_DIR, "bin/python");
@@ -62,16 +63,6 @@ export function ensureKernel(): Promise<void> {
 const DEFAULT_TIMEOUT_MS = 120_000;
 const STDERR_TAIL = 4096;
 
-type Reply = {
-  id: string | null;
-  ok: boolean;
-  out?: string;
-  err?: string;
-  result?: string | null;
-  error?: string | null;
-  note?: string;
-};
-
 export class Kernel {
   constructor(private opts: { python?: string; host?: string } = {}) {}
 
@@ -104,11 +95,13 @@ export class Kernel {
   private start() {
     this.buf = "";
     this.stderrTail = "";
-    const proc = spawn(this.opts.python ?? KERNEL_PYTHON, [
-      this.opts.host ?? KERNEL_HOST,
-    ], {
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const proc = spawn(
+      this.opts.python ?? KERNEL_PYTHON,
+      [this.opts.host ?? KERNEL_HOST],
+      {
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
     proc.stdout.setEncoding("utf8");
     proc.stderr.setEncoding("utf8");
     proc.stdout.on("data", (chunk: string) => {
