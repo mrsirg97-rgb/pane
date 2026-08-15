@@ -2,7 +2,12 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { loadExtensionTool, textOf, EXT_DIR, scratchDir } from "./_test-helpers.mjs";
+import {
+  loadExtensionTool,
+  textOf,
+  EXT_DIR,
+  scratchDir,
+} from "./_test-helpers.mjs";
 
 const {
   tool,
@@ -163,7 +168,10 @@ test("an unexpected mid-call death is announced to the dying call and the next c
     text,
     /note: fresh kernel; previous kernel exited \(code 9\); all previous variables are gone/,
   );
-  assert.ok(text.indexOf("note:") < text.indexOf("Out["), "note must render first");
+  assert.ok(
+    text.indexOf("note:") < text.indexOf("Out["),
+    "note must render first",
+  );
   assert.match(text, /Out\[.*\]: 2/);
 });
 
@@ -307,5 +315,8 @@ test("a dead kernel's stderr does not leak into the next kernel's death message"
 test("timeout message describes the lazy restart accurately", async () => {
   const r = await run({ code: "import time; time.sleep(30)", timeoutMs: 1500 });
   assert.equal(r.isError, true);
-  assert.match(textOf(r), /will be restarted on the next call; all variables are gone/);
+  assert.match(
+    textOf(r),
+    /will be restarted on the next call; all variables are gone/,
+  );
 });

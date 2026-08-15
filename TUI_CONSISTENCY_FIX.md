@@ -88,7 +88,6 @@ builtin paths resolved through the installed pi package via `PI_PKG` from
 Then the two theme JSONs get the new values, full `npm test` green, deployed
 copies overwritten.
 
-
 ## Revision 2 (final): flat surfaces
 
 Design pivot after seeing rev 1 live: message surfaces drop their backgrounds
