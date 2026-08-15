@@ -117,6 +117,48 @@ test("duplicate name across scopes is fine (different stores)", async () => {
   assert.equal(v.scope, "global");
 });
 
+test("create: job cwd is independent of the store key (global and cwd scopes)", async () => {
+  // global scope: job cwd defaults to the session cwd, never empty
+  const ct1 = fakeCrontab();
+  const { core: c1 } = makeCore("/ws/sess", ct1);
+  const g = await c1.create({ name: "gw", prompt: "p", cron: "0 0 * * *", scope: "global" });
+  assert.equal(g.cwd, "/ws/sess", "global job runs in the creating session's cwd");
+
+  // global scope with an explicit cwd: runs where told, still stored globally
+  const g2 = await c1.create({
+    name: "gw2",
+    prompt: "p",
+    cron: "1 0 * * *",
+    scope: "global",
+    cwd: "/shop/make-money",
+  });
+  assert.equal(g2.cwd, "/shop/make-money");
+
+  // cwd scope with an explicit cwd: the job runs where told, but the store
+  // is still keyed by the session cwd (list from this session must see it)
+  const ct2 = fakeCrontab();
+  const { home: h2, core: c2 } = makeCore("/ws/sess2", ct2);
+  const j = await c2.create({ name: "w", prompt: "p", cron: "2 0 * * *", cwd: "/shop/elsewhere" });
+  assert.equal(j.cwd, "/shop/elsewhere", "job runs where told");
+  assert.ok(
+    existsSync(join(h2, `${store.cwdHash("/ws/sess2")}.sqlite`)),
+    "stored in the session's store, not the job's cwd",
+  );
+  const seen = (await c2.list()).map((x) => x.id);
+  assert.ok(seen.includes(j.id), "visible to list from the creating session");
+});
+
+test("a removed job's name may be recreated; ids still mint forward", async () => {
+  const ct = fakeCrontab();
+  const { core } = makeCore("/ws/nm", ct);
+  const a = await core.create({ name: "recycle", prompt: "p", cron: "0 11 * * *" });
+  assert.equal(a.id, "j1");
+  await core.remove("j1");
+  const b = await core.create({ name: "recycle", prompt: "q", cron: "1 11 * * *" });
+  assert.equal(b.name, "recycle", "same name after remove");
+  assert.equal(b.id, "j2", "new id: the tombstone still counts");
+});
+
 test("create validates cron before writing anything", async () => {
   const ct = fakeCrontab();
   const before = ct.text;

@@ -46,7 +46,7 @@ function fakeCrontab(initial = "SHELL=/bin/bash\n") {
 function fakeSwap(running = [], opts = {}) {
   return async (url) => {
     if (opts.fail) throw new Error(opts.fail);
-    if (url.endsWith("/v1/models")) return { data: MODELS, object: "list" };
+    if (url.endsWith("/v1/models")) return { data: opts.models ?? MODELS, object: "list" };
     if (url.endsWith("/running")) return { running };
     throw new Error(`unexpected url ${url}`);
   };
@@ -246,6 +246,49 @@ test("something else resident + busy=force -> runs and eats the eviction", async
   const res = await promise;
   assert.equal(res.status, "ok");
   assert.equal(opts.spawn.calls.length, 1);
+});
+
+test("own model loaded+idle while another is resident -> runs (concurrent slots, no eviction)", async () => {
+  const { home, ct, key } = await setup();
+  const spawn = fakeSpawn();
+  const models = MODELS.map((m) => ({
+    ...m,
+    status: { value: m.id === "qwen3.8-27b-workers" ? "loaded" : "unloaded" },
+  }));
+  const res = await runner.fire(key, {
+    home,
+    key,
+    crontab: ct,
+    fetch: fakeSwap([{ model: "qwen3.8-27b", state: "ready" }], { models }),
+    spawn,
+    now: NOW,
+    piBin: "pi",
+    swapUrl: "http://127.0.0.1:8090",
+  });
+  assert.equal(res.status, "ok", "own slot already allocated: concurrent is safe");
+  assert.equal(spawn.calls.length, 1);
+});
+
+test("own model NOT loaded + something else resident -> skip (a swap/eviction is needed)", async () => {
+  const { home, ct, key, dbPath } = await setup();
+  const spawn = fakeSpawn();
+  const models = MODELS.map((m) => ({
+    ...m,
+    status: { value: m.id === "qwen3.8-27b" ? "loaded" : "unloaded" },
+  }));
+  const res = await runner.fire(key, {
+    home,
+    key,
+    crontab: ct,
+    fetch: fakeSwap([{ model: "qwen3.8-27b", state: "ready" }], { models }),
+    spawn,
+    now: NOW,
+    piBin: "pi",
+    swapUrl: "http://127.0.0.1:8090",
+  });
+  assert.equal(res.status, "skip");
+  assert.match(res.reason, /busy/);
+  assert.equal(spawn.calls.length, 0);
 });
 
 test("busy-check fetch failure -> fail-closed skip with reason", async () => {

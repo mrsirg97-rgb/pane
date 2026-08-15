@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,
-  name TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
   prompt TEXT NOT NULL,
   cron TEXT NOT NULL,
   at TEXT,
@@ -149,9 +149,15 @@ export async function busyState(fetch, swapUrl, jobModel) {
   }
   const norm = (n) => canon.get(n) ?? n;
   const own = norm(jobModel);
+  // own slot already allocated (loaded) -> concurrent execution, no eviction
+  const ownLoaded =
+    (models?.data ?? []).some(
+      (m) => norm(m.id) === own && m?.status?.value === "loaded",
+    );
+  if (ownLoaded) return { kind: "run", reason: null };
   const resident = new Set((running?.running ?? []).map((r) => norm(r.model)));
   if (resident.has(own)) return { kind: "run", reason: null };
-  if (resident.size === 0) return { kind: "run", reason: null };
+  if (resident.size === 0) return { kind: "run", reason: null }; // nothing to evict: a plain load
   return { kind: "busy", names: [...resident].join(", ") };
 }
 

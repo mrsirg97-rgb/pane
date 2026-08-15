@@ -41,14 +41,12 @@ function fail(message: string): never {
 
 type StoreRef = { scope: Scope; storeCwd: string | undefined };
 
-function refFor(
-  scope: Scope,
-  cwd: string | undefined,
-  sessionCwd: string,
-): StoreRef {
+// The store is keyed by the scope (global store, or the SESSION's cwd for the
+// cwd scope); where the job RUNS is its own `cwd` column, set in create.
+function refFor(scope: Scope, sessionCwd: string): StoreRef {
   return {
     scope,
-    storeCwd: scope === "global" ? undefined : (cwd ?? sessionCwd),
+    storeCwd: scope === "global" ? undefined : sessionCwd,
   };
 }
 
@@ -152,11 +150,8 @@ export function createSchedulerCore(
     scope?: Scope,
   ): { ref: StoreRef; job: StoredJob } => {
     const refs: StoreRef[] = scope
-      ? [refFor(scope, undefined, opts.sessionCwd)]
-      : [
-          refFor("global", undefined, opts.sessionCwd),
-          refFor("cwd", undefined, opts.sessionCwd),
-        ];
+      ? [refFor(scope, opts.sessionCwd)]
+      : [refFor("global", opts.sessionCwd), refFor("cwd", opts.sessionCwd)];
     const hits = refs
       .map((ref) => ({ ref, job: readMap(opts.home, ref).get(id) }))
       .filter((h) => h.job !== undefined);
@@ -226,7 +221,10 @@ export function createSchedulerCore(
       const prompt = String(input.prompt ?? "");
       if (!prompt) fail("create requires a non-empty prompt");
       const scope: Scope = input.scope === "global" ? "global" : "cwd";
-      const ref = refFor(scope, input.cwd, opts.sessionCwd);
+      const ref = refFor(scope, opts.sessionCwd);
+      // where the job runs: explicit, else the creating session's cwd - in
+      // both scopes, a job always has a working directory
+      const jobCwd = String(input.cwd ?? opts.sessionCwd);
       const model = String(input.model ?? DEFAULT_MODEL);
       const busy: BusyPolicy = input.busy === "force" ? "force" : "skip";
 
@@ -247,8 +245,10 @@ export function createSchedulerCore(
       // read phase: duplicate-name check (per scope store, tombstones count)
       // and a candidate id for the crontab key
       const readRefMap = readMap(opts.home, ref);
+      // names are unique among LIVE jobs; removed names may be recreated
+      // (audit separation flows from ids, which never reuse)
       for (const t of readRefMap.values())
-        if (t.name === name)
+        if (t.state !== "removed" && t.name === name)
           fail(
             `a job named '${name}' already exists in scope '${scope}' (state: ${t.state}); remove it first`,
           );
@@ -264,7 +264,7 @@ export function createSchedulerCore(
         prompt,
         cron,
         at,
-        cwd: ref.storeCwd ?? "",
+        cwd: jobCwd,
         model,
         busy,
       };
@@ -277,7 +277,7 @@ export function createSchedulerCore(
           const seq = appendEvent(db, "create", args, opts.session);
           applyEvent(map, seq, new Date().toISOString(), "create", args);
           persistJobs(db, map);
-          const row = [...map.values()].find((t) => t.name === name);
+          const row = [...map.values()].find((t) => t.name === name && t.state !== "removed");
           if (!row)
             fail(
               `concurrent create raced on name '${name}'; the crontab line is orphaned, remove it`,
@@ -307,8 +307,8 @@ export function createSchedulerCore(
         lines = null; // crontab unreadable: every job drifts
       }
       const refs: StoreRef[] = [
-        refFor("global", undefined, opts.sessionCwd),
-        refFor("cwd", undefined, opts.sessionCwd),
+        refFor("global", opts.sessionCwd),
+        refFor("cwd", opts.sessionCwd),
       ];
       const out: JobView[] = [];
       for (const ref of refs) {

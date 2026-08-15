@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,
-  name TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
   prompt TEXT NOT NULL,
   cron TEXT NOT NULL,
   at TEXT,
@@ -118,7 +118,9 @@ export function applyEvent(
   if (op === "create") {
     const a = args as unknown as CreateArgs;
     if (!a.name) return;
-    for (const t of map.values()) if (t.name === a.name) return; // duplicate name: first wins (core refuses anyway)
+    // duplicate name among LIVE jobs: first wins (core refuses anyway);
+    // removed names are recreatable - audit separation flows from ids
+    for (const t of map.values()) if (t.state !== "removed" && t.name === a.name) return;
     const id = mintId(map);
     map.set(id, {
       id,
