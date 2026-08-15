@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { openDb, withLog, withStore as withStoreShared } from "./sqlite.ts";
+import type { Hit, Memory, Store } from "./types/rem.types.ts";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -27,26 +28,6 @@ const IMPORTANCE_DEFAULT = 0.5;
 const REFLECTION_IMPORTANCE = 0.3;
 const AUTO_REFLECTION_IMPORTANCE = 0.2;
 const KIND_REFLECTION = "reflection";
-
-type Memory = {
-  id: number;
-  scope: string;
-  scope_label: string;
-  kind: string;
-  content: string;
-  source: string | null;
-  importance: number;
-  strength: number;
-  access_count: number;
-  superseded_by: number | null;
-  created_at: string;
-  last_accessed_at: string | null;
-  last_consolidated_at: string;
-};
-type Hit = Memory & {
-  effective_strength: number;
-  match: "fts" | "fuzzy" | "both" | "browse";
-};
 
 const ACTION = StringEnum(["learn", "recall", "reflect", "prune"] as const);
 const SCOPE_PARAM = StringEnum(["project", "global", "all"] as const);
@@ -88,8 +69,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5 (
   tokenize = 'porter unicode61'
 );
 `;
-
-type Store = { db: DatabaseSync; fts: boolean };
 
 export function __setFtsAvailable(v: boolean | undefined) {
   ftsOverride = v;

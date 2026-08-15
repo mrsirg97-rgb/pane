@@ -6,6 +6,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import type { FooterState, Usage } from "./types/footer.types.ts";
 
 const THINKING_COLORS = new Set([
   "thinkingOff",
@@ -23,14 +24,6 @@ export function formatTokens(count: number): string {
   if (count < 1_000_000) return `${Math.round(count / 1000)}k`;
   return `${(count / 1_000_000).toFixed(1)}M`;
 }
-
-type Usage = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  cacheHitRate?: number;
-};
 
 export function collectUsage(entries: any[]): Usage {
   const totals: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -62,18 +55,6 @@ export function collectUsage(entries: any[]): Usage {
   }
   return totals;
 }
-
-type FooterState = {
-  modelId: string;
-  reasoning: boolean;
-  thinkingLevel: string;
-  contextUsage:
-    | { tokens: number | null; contextWindow: number; percent: number | null }
-    | undefined;
-  branch: string | null;
-  autoCompact: boolean;
-  statuses: string[];
-};
 
 export function buildFooterLines(
   state: FooterState,

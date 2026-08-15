@@ -1,15 +1,9 @@
 import { mkdirSync, renameSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { CorruptionPolicy, OpenOptions } from "./types/sqlite.types.ts";
 
-export type CorruptionPolicy = "delete" | "quarantine";
-
-export type OpenOptions = {
-  path: string;
-  schema: string;
-  policy: CorruptionPolicy;
-  configure?: (db: DatabaseSync) => void;
-};
+export type { CorruptionPolicy, OpenOptions } from "./types/sqlite.types.ts";
 
 function rawOpen(o: OpenOptions): DatabaseSync {
   const db = new DatabaseSync(o.path);
