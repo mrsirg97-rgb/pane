@@ -2,7 +2,7 @@
 
 **pane** — a clear pane for [pi](https://github.com/earendil-works/pi). Flat chrome, status glyphs, honest state. For you and your agent: same glass, both sides.
 
-No fork. Eleven extensions on stock pi's public hooks; delete any file, get vanilla back.
+No fork. Twelve extensions on stock pi's public hooks; delete any file, get vanilla back.
 
 ```
 ● bash · $ node --test +1 lines
@@ -29,6 +29,7 @@ one visual language, both directions. status glyphs `○ ◐ ● ✕` everywhere
 **the agent's side**
 
 - `todo` — a concurrent job queue wearing a todo UI. enforced FSM (pending -> in_progress -> done | failed; failed -> retry), minted ids, several tasks in flight, batched transitions serialized against fresh state. illegal transitions return errors that teach the protocol. create accepts dependsOn (id or text) to build task trees: completion is gated by dependencies, cycles are refused, blocked tasks are skipped by next. move reorders the queue via minted-position events (1-based pos). every event is session-attributed with claim semantics: start claims, foreign complete refuses (fail it first to take over), fail frees. sqlite event log under the hood: idempotent create, replayable history, auto-compaction past 1000 events (full-state snapshot, epoch reset), corruption fails closed.
+- `scheduler` — background jobs on your crontab, bound to the worker GPU. two sqlite stores (global = user, per-cwd) with todo's event-log discipline, plus tombstones so ids are never reused; the tagged crontab lines are the scheduling truth and are written before the store commit, so any split between the two shows up as a `drift` note in list instead of a never-firing job. create schedules a headless pi worker session (5-field vixie cron, or `once` + `at` which self-consumes on first fire, no retry). fires run through a deployed `runner.sh` under flock (one run per key; a held lock records a skip): the GPU busy check normalizes model names through llama-swap `/v1/models` aliases, skips when another model is resident (`busy: force` evicts), and fails closed when llama-swap is unreachable. runs are audited as run events (session NULL) and tee'd to `runs/<scope>/<id>/<ts>.log` (newest 20 kept); a once job marks done before consuming its line, so a crash in between self-heals on the next fire.
 - `rem` — a memory tool: learn commits facts and constraints (idempotent, scoped global or per-project), recall is fuzzy/semantic search over past solutions with project-first global-fill, reflect stores distilled logs (and auto-parks compaction summaries), prune consolidates strength decay or removes/reduces. sqlite-backed, corruption quarantined aside, never deleted.
 - `python` — persistent IPython kernel; state survives across calls. timeout kills the whole kernel (all state) and says so; an unexpected death is announced on the next call with exit description and stderr tail.
 - `web-search` + `web-fetch` — SearXNG search, guarded fetch: DNS refusal of private space with readable errors, redirects re-checked, byte/char caps with loud truncation markers, trafilatura extraction. optional egress proxy for connect-time enforcement.
@@ -37,7 +38,7 @@ one visual language, both directions. status glyphs `○ ◐ ● ✕` everywhere
 
 `AGENTS.template.md` — the working contract these were built for. pane-setup seeds it to `~/.pi/agent/AGENTS.md` on first launch (never overwriting yours; delete the copy to re-seed). the template name keeps the repo copy out of pi's in-repo context discovery, so it never double-loads.
 
-170+ tests: `npm test` (runs `node --test __tests__/*.test.mjs`).
+330+ tests: `npm test` (runs `node --test __tests__/*.test.mjs`).
 
 ## install
 
@@ -54,11 +55,13 @@ or copy `extensions/` into `~/.pi/agent/extensions/` and `themes/` into `~/.pi/a
 - **python kernel** bootstraps itself on first use: creates `~/.pi/agent/kernel-venv` and installs ipython/numpy/pandas (needs `python3` + network; first call is slow once). `kernel_host.py` runs from the package; a copy at `~/.pi/agent/kernel/` overrides it.
 - **web tools**: web-search expects SearXNG on `127.0.0.1:8888` (`PI_SEARXNG_URL` overrides); web-fetch routes through a proxy at `127.0.0.1:8889` (`PI_WEB_FETCH_PROXY=` empty fetches direct). a docker compose pairing (searxng + tinyproxy + DOCKER-USER egress firewall) is recommended, or tunnel both ports from a machine that has it.
 - **trafilatura** on PATH upgrades web-fetch extraction; falls back to built-in tag-strip.
+- **scheduler** expects llama-swap on `127.0.0.1:8090` (`PANE_SWAP_URL` overrides) for the GPU busy check; unreachable means every fire fails closed with a skip record. `~/.pi/cron-env` (sourced by `runner.sh` after its baseline PATH) can extend the cron environment. the runner deploys itself to `~/.pi/agent/scheduler/` on first use (overwrite-when-changed).
 
 ## caveats
 
 - `builtin-restyle` and `scroll-speed` touch pi 0.84.1 exported internals. a pi update may wobble them; failure mode is stock look or a loud load error, never silent breakage. delete the file, restyle gone.
 - cross-process todo writes (two pi sessions, same cwd) are last-writer-wins; WAL prevents corruption, and the event log makes races detectable, not lost silently.
+- `scheduler` only ever rewrites crontab lines carrying a `pane-scheduler:<key>` tag; hand-editing those lines is the supported way to fix a drift note. once jobs fire at the minute of `at` and delete themselves; a failed once job is done-with-fail (re-create to retry). the crontab round-trip is byte-identical except for trailing whitespace: runs end with exactly one trailing newline. a `crontab -l` failure that is not the spool's own `no crontab for` (PAM, permissions) refuses the whole action rather than rebuild from a false empty - a wiped crontab is the failure this refuses.
 
 ## philosophy
 
