@@ -87,3 +87,14 @@ builtin paths resolved through the installed pi package via `PI_PKG` from
 
 Then the two theme JSONs get the new values, full `npm test` green, deployed
 copies overwritten.
+
+
+## Revision 2 (final): flat surfaces
+
+Design pivot after seeing rev 1 live: message surfaces drop their backgrounds
+entirely. pane is flat wherever the tools are flat; boxed user/compaction
+messages were the last washes standing. `userMessageBg` / `customMessageBg`
+are now `""` — pi's sanctioned transparent (`bgAnsi("")` emits ESC[49m, the
+terminal default background). Labels keep the accent, text keeps full
+contrast. The family/chroma work above remains as the record of how we got
+here; the shipped invariant is flatness (tested), not family membership.

@@ -138,16 +138,15 @@ test("inToolFamily: achromatic edges", () => {
 });
 
 for (const variant of ["dark", "light"]) {
-  test(`subtle-${variant}: message surfaces wear the tool box color family`, () => {
+  test(`subtle-${variant}: message surfaces are flat (no background)`, () => {
+    // Design pivot 2026-08-14: pane is flat everywhere the tools are flat.
+    // "" is pi's sanctioned transparent: bgAnsi("") paints the terminal
+    // default background (ESC[49m). Boxes come back the day this fails.
     const subtle = resolveTheme(SUBTLE[variant]);
     const builtin = resolveTheme(BUILTIN[variant]);
     for (const token of ["customMessageBg", "userMessageBg"]) {
+      assert.equal(subtle[token], "", `${token} should be transparent`);
       assert.notEqual(subtle[token], builtin[token], `${token} is still stock`);
-      assert.ok(
-        inToolFamily(subtle[token], subtle.toolPendingBg),
-        `${token} ${subtle[token]} is not in the tool box hue family ` +
-          `(${subtle.toolPendingBg})`,
-      );
     }
   });
 
@@ -192,17 +191,3 @@ function channelSpread(hex) {
   return Math.max(r, g, b) - Math.min(r, g, b);
 }
 
-for (const variant of ["dark", "light"]) {
-  test(`subtle-${variant}: message surfaces match the tool family's chroma`, () => {
-    const subtle = resolveTheme(SUBTLE[variant]);
-    const family = channelSpread(subtle.toolPendingBg);
-    for (const token of ["customMessageBg", "userMessageBg"]) {
-      const spread = channelSpread(subtle[token]);
-      assert.ok(
-        Math.abs(spread - family) <= 5,
-        `${token} chroma spread ${spread} strays >5 from tool family ${family}; ` +
-          `use lightness for prominence, not saturation`,
-      );
-    }
-  });
-}
