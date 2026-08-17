@@ -20,7 +20,8 @@
       "extensions/python-kernel.ts",
       "extensions/web-search.ts",
       "extensions/web-fetch.ts",
-      "extensions/tool-retry-guard.ts"
+      "extensions/tool-retry-guard.ts",
+      "extensions/compact-guard.ts"
     ]
   },
   "dependencies": {
