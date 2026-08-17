@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { loadExtensionTool, EXT_DIR } from "./_test-helpers.mjs";
 
@@ -62,13 +64,10 @@ function run(modelId, tokensBefore, over = {}) {
   return { result, notes };
 }
 
-test("64k model at 50k: under its own trigger, cancel", () => {
+test("64k model at 50k: under its own trigger, cancel, quiet in the TUI", () => {
   const { result, notes } = run("qwen3.8-workers", 50_000);
   assert.deepEqual(result, { cancel: true });
-  assert.equal(notes.length, 1);
-  assert.match(notes[0], /qwen3\.8-workers/);
-  assert.match(notes[0], /cancel/);
-  assert.doesNotMatch(notes[0], /proceed/);
+  assert.equal(notes.length, 0, "a cancel must not notify in the TUI");
 });
 
 test("64k model at 60k: past its own trigger, let pi proceed", () => {
@@ -79,12 +78,10 @@ test("64k model at 60k: past its own trigger, let pi proceed", () => {
   assert.doesNotMatch(notes[0], /cancel/);
 });
 
-test("262k model at 200k: under its own trigger, cancel", () => {
+test("262k model at 200k: under its own trigger, cancel, quiet in the TUI", () => {
   const { result, notes } = run("huihui3.8", 200_000);
   assert.deepEqual(result, { cancel: true });
-  assert.equal(notes.length, 1);
-  assert.match(notes[0], /huihui3\.8/);
-  assert.match(notes[0], /cancel/);
+  assert.equal(notes.length, 0, "a cancel must not notify in the TUI");
 });
 
 test("262k model at 210k: past its own trigger, let pi proceed", () => {
@@ -185,17 +182,36 @@ test("per-row reserve override wins (rig's exact 64k row: reserve 8192)", () => 
   assert.equal(decide(rigRow, 57_345).cancel, false);
 });
 
-test("headless: the one line goes to the console, not the UI", () => {
-  const { ctx, lines } = headlessCtx({ id: "qwen3.8-workers" });
+test("headless: cancel and proceed both log to the console", () => {
   const orig = console.log;
+  const lines = [];
   console.log = (...a) => lines.push(a.join(" "));
   try {
-    const result = handlers.session_before_compact?.(compactEvent(50_000), ctx);
-    assert.deepEqual(result, { cancel: true });
-    assert.equal(lines.length, 1);
-    assert.match(lines[0], /\[compact-guard\]/);
-    assert.match(lines[0], /cancel/);
+    const ctx = headlessCtx({ id: "qwen3.8-workers" }).ctx;
+    const cancel = handlers.session_before_compact?.(compactEvent(50_000), ctx);
+    assert.deepEqual(cancel, { cancel: true });
+    const proceed = handlers.session_before_compact?.(
+      compactEvent(60_000),
+      ctx,
+    );
+    assert.equal(proceed, undefined);
+    assert.equal(lines.length, 2);
+    assert.match(lines[0], /\[compact-guard\] qwen3\.8-workers: cancel/);
+    assert.match(lines[1], /\[compact-guard\] qwen3\.8-workers: proceed/);
   } finally {
     console.log = orig;
   }
+});
+
+test("the rule: the global reserve is the interactive default model's derived reserve", () => {
+  const settings = JSON.parse(
+    readFileSync(join(homedir(), ".pi/agent/settings.json"), "utf8"),
+  );
+  const modelId = settings.defaultModel;
+  assert.ok(MODEL_ROWS[modelId], `default model ${modelId} has a row`);
+  assert.equal(
+    GLOBAL_RESERVE,
+    reserveOf(MODEL_ROWS[modelId]),
+    "global reserve must equal the default model's derived reserve",
+  );
 });
